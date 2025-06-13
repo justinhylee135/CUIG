@@ -1,0 +1,4 @@
+*.sh
+UnlearningMethods/base_models/UnlearnCanvas
+Evaluation/UnlearnCanvas/classifiers/*.pth
+__pycache__
