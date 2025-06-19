@@ -96,7 +96,8 @@ if __name__ == '__main__':
                     
                     # Skip if image already exists
                     if os.path.exists(output_path):
-                        print(f"Detected! Skipping: {output_path}!")
+                        print(f"Image already exists! Skipping: {output_path}!")
+                        pbar.update(1)
                         continue
 
                     # Set prompt
