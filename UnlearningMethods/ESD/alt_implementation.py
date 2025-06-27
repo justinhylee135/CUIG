@@ -15,22 +15,25 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..
 sys.path.append(project_root)
 
 ## Utils
-from utils.sd_utils import esd_sd_call
+# from utils.sd_utils import esd_sd_call
 StableDiffusionPipeline.__call__ = esd_sd_call
 
 ## Continual Enhancements
 from ContinualEnhancements.Regularization.l1sp import calculate_l1sp_loss
 from ContinualEnhancements.Regularization.l2sp import calculate_l2sp_loss
 
+def get_torch_dtype(torch_dtype_string):
+    if torch_dtype_string == 'float32':
+        return torch.float32
+    elif torch_dtype_string == 'bfloat16':
+        return torch.bfloat16
+    elif torch_dtype_string == 'float16':
+        return torch.float16
+    else:
+        raise ValueError(f"Unsupported torch dtype: {torch_dtype_string}")
+
 def load_sd_models(basemodel_id, torch_dtype, device='cuda:0'):
-    # Select torch dtype
-    if torch_dtype == 'float32':
-        torch_dtype = torch.float32
-    elif torch_dtype == 'bfloat16':
-        torch_dtype = torch.bfloat16
-    elif torch_dtype == 'float16':
-        torch_dtype = torch.float16
-    print(f"Loading Stable Diffusion Model from {basemodel_id} with torch dtype {torch_dtype} on device {device}")
+    print(f"\nLoading Stable Diffusion Model from {basemodel_id} with torch dtype {torch_dtype} on device {device}")
     
     # This will be the frozen base UNet model
     base_unet = UNet2DConditionModel.from_pretrained(basemodel_id, subfolder="unet").to(device, torch_dtype)
@@ -40,7 +43,7 @@ def load_sd_models(basemodel_id, torch_dtype, device='cuda:0'):
     esd_unet = UNet2DConditionModel.from_pretrained(basemodel_id, subfolder="unet").to(device, torch_dtype)
 
     # Stable Diffusion Pipeline
-    pipe = StableDiffusionPipeline.from_pretrained(basemodel_id, unet=base_unet, torch_dtype=torch_dtype, use_safetensors=True, allow_pickle=True).to(device)
+    pipe = StableDiffusionPipeline.from_pretrained(basemodel_id, unet=base_unet, torch_dtype=torch_dtype, use_safetensors=True).to(device)
     
     return pipe, base_unet, esd_unet
 
@@ -130,12 +133,17 @@ if __name__ == '__main__':
     batchsize = 1
     lr = args.lr
     device = args.device
-    torch_dtype_string = args.torch_dtype
+    torch_dtype = get_torch_dtype(args.torch_dtype)
     save_path = args.save_path
     save_parent_dir = os.path.dirname(save_path)
     os.makedirs(save_parent_dir, exist_ok=True)
     base_model_dir = args.base_model_dir
     continual_unet_ckpt_path = args.continual_unet_ckpt_path
+    
+    # Exit if model exists
+    if os.path.exists(save_path):
+        print(f"Model already exists at {save_path}. Exiting to avoid overwriting.")
+        sys.exit(0)
     
     # Continual Enhancements
     l1sp_weight = args.l1sp_weight
@@ -145,7 +153,7 @@ if __name__ == '__main__':
     criteria = torch.nn.MSELoss()
 
     # Load Model Components and Ckpt if provided
-    pipe, base_unet, esd_unet = load_sd_models(basemodel_id=base_model_dir, torch_dtype=torch_dtype_string, device=device)
+    pipe, base_unet, esd_unet = load_sd_models(basemodel_id=base_model_dir, torch_dtype=torch_dtype, device=device)
     if continual_unet_ckpt_path is not None:
         state_dict = torch.load(continual_unet_ckpt_path, map_location=device)
         base_unet.load_state_dict(state_dict, strict=False)
@@ -163,9 +171,9 @@ if __name__ == '__main__':
     if lr is None:
         if concept_type in ['style', 'celebrity']: lr = 1e-5
         if concept_type in ['object']: lr = 5e-6
-        print(f"Using default LR of {lr} for {concept_type} unlearning")
+        print(f"\nUsing default LR of {lr} for {concept_type} unlearning")
     else:
-        print(f"Using provided LR of {lr} for {concept_type} unlearning")       
+        print(f"\nUsing provided LR of {lr} for {concept_type} unlearning")       
     print(f"Using negative guidance of {negative_guidance}")
 
     # Setup training

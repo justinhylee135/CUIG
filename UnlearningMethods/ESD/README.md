@@ -15,24 +15,13 @@ cd $REPO_ROOT/UnlearningMethods/ESD
 ### Independent
 #### Style
 ```bash
-python train-esd.py \
---erase_concept 'Abstractionism Style' \
+python train_esd.py \
+--concept 'Abstractionism' \
 --concept_type 'style' \
---train_method 'esd-x' \
---save_path $OUTPUT_ROOT/esd/models/independent/base/style/Abstractionism.safetensors \
---base_model_dir $BASE_MODEL_DIR \
---iterations 200 \
---lr 0.00005 \
---negative_guidance 2 \
---torch_dtype bfloat16
+--train_method 'xattn' \
+--save_path $OUTPUT_ROOT/esd/models/independent/base/style/Abstractionism.pth \
+--base_model_dir $BASE_MODEL_DIR 
 ```
-
-python train-esd-original.py \
---erase_concept 'Abstractionism Style' \
---train_method 'esd-x' \
---save_path $OUTPUT_ROOT/esd/models/independent/base/style/Abstractionism.safetensors \
---base_model_dir $BASE_MODEL_DIR \
---iterations 200 
 
 #### Object
 #### Celebrity
@@ -41,6 +30,17 @@ python train-esd-original.py \
 #### Object
 #### Celebrity
 ### Simultaneous
+#### Style
+```bash
+python train_esd.py \
+--concept '["Abstractionism", "Byzantine", "Cartoon"]' \
+--concept_type 'style' \
+--train_method 'xattn' \
+--save_path $OUTPUT_ROOT/esd/models/simultaneous/base/style/thruCartoon/thruCartoon.pth \
+--base_model_dir $BASE_MODEL_DIR \
+--eval_every 100 \
+--classifier_dir $REPO_ROOT/Evaluation/UnlearnCanvas/classifiers
+```
 #### Style
 #### Object
 #### Celebrity

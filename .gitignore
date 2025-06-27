@@ -2,3 +2,5 @@
 UnlearningMethods/base_models/UnlearnCanvas
 Evaluation/UnlearnCanvas/classifiers/*.pth
 __pycache__
+cache
+cad_temp

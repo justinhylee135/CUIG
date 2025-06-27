@@ -1,6 +1,5 @@
 # Standard Library
 import argparse
-import json
 import os
 import ast
 from PIL import Image
@@ -30,13 +29,13 @@ if __name__ == '__main__':
     parser.add_argument("--W", type=int, default=512, help="image width, in pixel space", )
 
     # Concept Subset parameters
-    parser.add_argument("--themes_subset", type=str, default=None)
+    parser.add_argument("--styles_subset", type=str, default=None)
     parser.add_argument("--objects_subset", type=str, default=None)
 
     args = parser.parse_args()
 
     # Constants
-    theme_available=["Abstractionism", "Artist_Sketch", "Blossom_Season", "Bricks", "Byzantine", "Cartoon",
+    styles_available=["Abstractionism", "Artist_Sketch", "Blossom_Season", "Bricks", "Byzantine", "Cartoon",
                     "Cold_Warm", "Color_Fantasy", "Comic_Etch", "Crayon", "Cubism", "Dadaism", "Dapple",
                     "Defoliation", "Early_Autumn", "Expressionism", "Fauvism", "French", "Glowing_Sunset",
                     "Gorgeous_Love", "Greenfield", "Impressionism", "Ink_Art", "Joy", "Liquid_Dreams",
@@ -44,16 +43,16 @@ if __name__ == '__main__':
                     "Pastel", "Pencil_Drawing", "Picasso", "Pop_Art", "Red_Blue_Ink", "Rust", "Seed_Images",
                     "Sketch", "Sponge_Dabbed", "Structuralism", "Superstring", "Surrealism", "Ukiyoe",
                     "Van_Gogh", "Vibrant_Flow", "Warm_Love", "Warm_Smear", "Watercolor", "Winter"]
-    class_available = ["Architectures", "Bears", "Birds", "Butterfly", "Cats", "Dogs", "Fishes", "Flame", "Flowers",
+    objects_available = ["Architectures", "Bears", "Birds", "Butterfly", "Cats", "Dogs", "Fishes", "Flame", "Flowers",
                     "Frogs", "Horses", "Human", "Jellyfish", "Rabbits", "Sandwiches", "Sea", "Statues", "Towers",
                     "Trees", "Waterfalls"]
 
 
     # Set subset of concepts to generate
-    themes_subset = theme_available
-    objects_subset = class_available
-    if args.themes_subset is not None:
-        themes_subset = ast.literal_eval(args.themes_subset)
+    styles_subset = styles_available
+    objects_subset = objects_available
+    if args.styles_subset is not None:
+        styles_subset = ast.literal_eval(args.styles_subset)
     if args.objects_subset is not None:
         objects_subset = ast.literal_eval(args.objects_subset)
 
@@ -62,12 +61,16 @@ if __name__ == '__main__':
     device = "cuda"
 
     # Load model
-    pipe = StableDiffusionPipeline.from_pretrained(args.pipeline_dir, torch_dtype=torch.float16, use_safetensors=True, allow_pickle=True).to("cuda")
+    pipe = StableDiffusionPipeline.from_pretrained(args.pipeline_dir, torch_dtype=torch.float16, use_safetensors=True).to("cuda")
     if ".safetensors" in args.unet_ckpt_path:
         unet_state_dict = load_file(args.unet_ckpt_path, device="cuda")
     else:
         unet_state_dict = torch.load(args.unet_ckpt_path, map_location="cuda")
-
+    keys_list = list(unet_state_dict.keys())
+    for key in keys_list:
+        if key.startswith("unet."):
+            unet_state_dict[key.replace("unet.", "")] = unet_state_dict.pop(key)
+    
     missing, unexpected = pipe.unet.load_state_dict(unet_state_dict, strict=False)
     print(f"Loaded UNet from {args.unet_ckpt_path}")
     print(f"Loaded keys: {len(unet_state_dict)}")
@@ -85,14 +88,14 @@ if __name__ == '__main__':
     os.makedirs(output_dir, exist_ok=True)
 
     # Start generating images
-    total_iterations = len(args.seed) * len(themes_subset) * len(objects_subset)
+    total_iterations = len(args.seed) * len(styles_subset) * len(objects_subset)
     with tqdm(total=total_iterations, desc="Generating images", unit="image") as pbar:
         for seed in args.seed:
             seed_everything(seed) # Set seed for reproducibility
-            for theme in themes_subset:
+            for style in styles_subset:
                 for obj in objects_subset:
                     # Set output path for image
-                    output_path = os.path.join(args.output_dir, f"{theme}_{obj}_seed{seed}.jpg")
+                    output_path = os.path.join(args.output_dir, f"{style}_{obj}_seed{seed}.jpg")
                     
                     # Skip if image already exists
                     if os.path.exists(output_path):
@@ -101,7 +104,7 @@ if __name__ == '__main__':
                         continue
 
                     # Set prompt
-                    prompt = f"A {obj} image in {theme} style"
+                    prompt = f"A {obj} image in {style} style"
 
                     # Generate image
                     image = pipe(prompt=prompt, width=args.W, height=args.H, num_inference_steps=args.steps, guidance_scale=args.cfg_txt).images[0]

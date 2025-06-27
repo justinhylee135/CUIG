@@ -7,9 +7,9 @@ cd $REPO_ROOT/Evaluation/UnlearnCanvas
 Example below shows sampling a model that has unlearned the style "Abstractionism" via the unlearning method ESD. The style other than "Abstractionism" are the in-domain retention set and the objects are the cross-domain retention set used in our paper.
 ```bash
 python sample.py \
---unet_ckpt_path $OUTPUT_ROOT/esd/models/independent/base/style/Abstractionism.safetensors \
+--unet_ckpt_path $OUTPUT_ROOT/esd/models/independent/base/style/Abstractionism.pth \
 --output_dir $OUTPUT_ROOT/esd/eval_results/independent/base/style/Abstractionism/images \
---themes_subset '["Abstractionism", "Blossom_Season","Rust","Crayon","Fauvism","Superstring","Red_Blue_Ink", "Gorgeous_Love", "French", "Joy", "Greenfield", "Expressionism", "Impressionism"]' \
+--styles_subset '["Abstractionism", "Blossom_Season","Rust","Crayon","Fauvism","Superstring","Red_Blue_Ink", "Gorgeous_Love", "French", "Joy", "Greenfield", "Expressionism", "Impressionism"]' \
 --objects_subset '["Architectures", "Butterfly", "Flame", "Flowers", "Horses", "Human", "Sea", "Trees"]' \
 --pipeline_dir $BASE_MODEL_DIR 
 ```
@@ -26,4 +26,23 @@ python evaluate.py \
 --cross_retain '["Architectures", "Butterfly", "Flame", "Flowers", "Horses", "Human", "Sea", "Trees"]'
 ```
 
+#### Simultaneous
+```bash
+python sample.py \
+--unet_ckpt_path $OUTPUT_ROOT/esd/models/simultaneous/base/style/thruCartoon/thruCartoon.pth \
+--output_dir $OUTPUT_ROOT/esd/eval_results/simultaneous/base/style/thruCartoon/images \
+--styles_subset '["Abstractionism", "Byzantine", "Cartoon", "Blossom_Season","Rust","Crayon","Fauvism","Superstring","Red_Blue_Ink", "Gorgeous_Love", "French", "Joy", "Greenfield", "Expressionism", "Impressionism"]' \
+--objects_subset '["Architectures", "Butterfly", "Flame", "Flowers", "Horses", "Human", "Sea", "Trees"]' \
+--pipeline_dir $BASE_MODEL_DIR 
+```
+
+```bash
+python evaluate.py \
+--input_dir $OUTPUT_ROOT/esd/eval_results/simultaneous/base/style/thruCartoon/images \
+--output_dir $OUTPUT_ROOT/esd/eval_results/simultaneous/base/style/thruCartoon/metrics \
+--classifier_dir $REPO_ROOT/Evaluation/UnlearnCanvas/classifiers \
+--unlearn '["Abstractionism", "Byzantine", "Cartoon"]' \
+--retain '["Blossom_Season","Rust","Crayon","Fauvism","Superstring","Red_Blue_Ink", "Gorgeous_Love", "French", "Joy", "Greenfield", "Expressionism", "Impressionism"]' \
+--cross_retain '["Architectures", "Butterfly", "Flame", "Flowers", "Horses", "Human", "Sea", "Trees"]'
+```
 ---
