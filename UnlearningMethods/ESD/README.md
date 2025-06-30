@@ -1,6 +1,6 @@
 # ESD: Erasing Concepts from Stable Diffusion
 
-This README provides instructions for training, sampling, and evaluating ESD (Erasing Stable Diffusion) models across independent, continual, and simultaneous configurations. It also outlines the use of ContinualEnhancement methods to improve unlearning performance over time.
+This README provides instructions for training ESD (Erasing Stable Diffusion) models across independent, continual, and simultaneous configurations. It also outlines the use of ContinualEnhancement methods to improve unlearning performance over time.
 
 This implementation builds on [Erasing Concepts from Diffusion Models by Rohit Gandikota et al](https://github.com/rohitgandikota/erasing).
 

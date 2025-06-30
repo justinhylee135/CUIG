@@ -1,4 +1,4 @@
-# This code is modified from the Huggingface repository: https://github.com/huggingface/diffusers/blob/main/examples/dreambooth/train_dreambooth_lora.py, and
+# Standard Library Imports
 import argparse
 import hashlib
 import itertools
@@ -9,6 +9,7 @@ import os
 import warnings
 from pathlib import Path
 
+# Third Party Imports
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -18,21 +19,9 @@ from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
 from huggingface_hub import HfApi, create_repo
-from model_pipeline import (
-    CustomDiffusionAttnProcessor,
-    CustomDiffusionPipeline,
-    set_use_memory_efficient_attention_xformers,
-)
 from packaging import version
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer, PretrainedConfig
-from utils import (
-    CustomDiffusionDataset,
-    PromptDataset,
-    collate_fn,
-    filter,
-    getanchorprompts,
-)
 
 import diffusers
 from diffusers import (
@@ -42,14 +31,24 @@ from diffusers import (
     DPMSolverMultistepScheduler,
     UNet2DConditionModel,
 )
-if version.parse(diffusers.__version__) < version.parse("0.20.0"):
-    from diffusers.models.cross_attention import CrossAttention
-else:
-    from diffusers.models.attention import Attention as CrossAttention
-
+from diffusers.models.attention import Attention as CrossAttention
 from diffusers.optimization import get_scheduler
 from diffusers.utils import check_min_version, is_wandb_available
 from diffusers.utils.import_utils import is_xformers_available
+
+# Local Imports
+from src.model import (
+    CustomDiffusionAttnProcessor,
+    CustomDiffusionPipeline,
+    set_use_memory_efficient_attention_xformers,
+)
+from src.utils import (
+    CustomDiffusionDataset,
+    PromptDataset,
+    collate_fn,
+    filter,
+    getanchorprompts,
+)
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 check_min_version("0.14.0")
