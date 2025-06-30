@@ -7,6 +7,7 @@ import torch
 import numpy as np
 from torchvision import transforms
 from diffusers import StableDiffusionPipeline, DDIMScheduler
+import os
 import matplotlib.pyplot as plt
 
 def process_input_concepts(concept, concept_type):
@@ -57,11 +58,14 @@ def get_pipelines(model_path, unet_ckpt, devices):
     
     # Load UNet checkpoint if provided
     if unet_ckpt is not None:
-        print(f"Loading UNet checkpoint from {unet_ckpt}...")
-        unet_state_dict = torch.load(unet_ckpt, map_location=devices[0])
-        frz_pipeline.unet.load_state_dict(unet_state_dict)
-        pipeline.unet.load_state_dict(unet_state_dict)
-        print(f"UNet checkpoint loaded successfully from {unet_ckpt}")
+        if not os.path.exists(unet_ckpt):
+            print(f"UNet checkpoint not found at '{unet_ckpt}'. Using default UNet from pipeline '{model_path}'...")
+        else:
+            print(f"Loading UNet checkpoint from '{unet_ckpt}'...")
+            unet_state_dict = torch.load(unet_ckpt, map_location=devices[0])
+            frz_pipeline.unet.load_state_dict(unet_state_dict)
+            pipeline.unet.load_state_dict(unet_state_dict)
+            print(f"UNet checkpoint loaded successfully from '{unet_ckpt}'")
     
     frz_pipeline.unet.eval()
     frz_pipeline.unet.requires_grad_(False)

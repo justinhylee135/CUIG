@@ -54,9 +54,9 @@ if __name__ == '__main__':
     # Training
     parser.add_argument('--train_method', help='Parameters to update', type=str, required=True, choices=['xattn','noxattn', 'selfattn', 'full'])
     parser.add_argument('--iterations', help='Number of iterations used to train', type=int, required=False, default=1000)
-    parser.add_argument('--lr', help='Learning rate', type=float, required=False, default=None)
+    parser.add_argument('--lr', help='Learning rate', type=str, required=False, default=None)
     parser.add_argument('--devices', help='CUDA devices used for loading frozen and esd unet', type=str, required=False, default='0,0')
-    
+
     # Input/Output
     parser.add_argument('--base_model_dir', help='Directory to diffusers pipeline', type=str, required=False, default='CompVis/stable-diffusion-v1-4')
     parser.add_argument('--save_path', help='output directory to save results', type=str, required=True)
@@ -119,10 +119,12 @@ if __name__ == '__main__':
     # Set up training parameters
     lr = args.lr
     if lr is None:
+        # LR used in our paper
         if args.concept_type in ['style', 'celebrity']: lr = 1e-5
-        if args.concept_type in ['object']: lr = 5e-6
+        if args.concept_type in ['object']: lr = 8e-6
         print(f"\nUsing default LR of {lr} for {args.concept_type} unlearning")
     else:
+        lr = float(lr)
         print(f"\nUsing provided LR of {lr} for {args.concept_type} unlearning")
     opt = torch.optim.Adam(parameters, lr=lr)
     criteria = torch.nn.MSELoss()
@@ -142,7 +144,7 @@ if __name__ == '__main__':
     selft_mask_dict = None
     grad_hooks = []
     if args.selft_loss is not None:
-        print(f"Using SelFT with loss type: {args.selft_loss}, top-k: {args.selft_topk}")
+        print(f"Using SelFT with loss type: '{args.selft_loss}', top-k: '{args.selft_topk}'")
         
         # Generate or load SelFT masks (would need to adapt for diffusers UNet)
         selft_mask_dict = get_selft_mask_dict(
@@ -222,16 +224,24 @@ if __name__ == '__main__':
             loss = criteria(pnoise_prompt_esd, target)
             
             # Regularizers
+            l1sp_loss = None
+            l2sp_loss = None
             if args.l1sp_weight > 0.0:
-                loss += args.l1sp_weight * calculate_l1sp_loss(pipeline.unet, original_params)
-            ## L2SP Regularization
+                l1sp_loss = args.l1sp_weight * calculate_l1sp_loss(pipeline.unet, original_params)
+                loss += l1sp_loss
             if args.l2sp_weight > 0.0:
-                loss += args.l2sp_weight * calculate_l2sp_loss(pipeline.unet, original_params)
+                l2sp_loss = args.l2sp_weight * calculate_l2sp_loss(pipeline.unet, original_params)
+                loss += l2sp_loss
 
-            # Update weights to erase the concept
+            # Take Gradient and Optimizer Step
             loss.backward()
-            pbar.set_postfix({"loss": loss.item(), "timestep": timestep_idx, "prompt": prompt})
             opt.step()
+            
+            # Log progress (add regularizer losses if they exist)
+            pbar_postfix = {"loss": loss.item(), "timestep": timestep_idx, "prompt": prompt}
+            if l1sp_loss is not None: pbar_postfix["l1sp_loss"] = l1sp_loss.item()
+            if l2sp_loss is not None: pbar_postfix["l2sp_loss"] = l2sp_loss.item()
+            pbar.set_postfix(pbar_postfix)
             
             # Simultaneous Early Stopping
             iteration+=1
@@ -243,7 +253,7 @@ if __name__ == '__main__':
                 
                 # Check for early stopping
                 best_ua, no_improvement_count, stop_training = check_early_stopping(
-                    ua, best_ua, no_improvement_count, args.patience
+                    ua, best_ua, no_improvement_count, args.eval_every, args.patience
                 )
             pbar.update(1)
             

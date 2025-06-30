@@ -65,14 +65,14 @@ def get_selft_mask_dict(pipeline, mask_dict_path, grad_dict_path, prompt_list, a
     # Check if the mask dictionary exists
     if mask_dict_path is not None and os.path.exists(mask_dict_path):
         mask_dict = torch.load(mask_dict_path, map_location=device)
-        print(f"\nLoaded SelFT mask dictionary from {mask_dict_path}")
+        print(f"\nLoaded SelFT mask dictionary from '{mask_dict_path}'")
         print(f"Skipping SelFT mask calculation")
         return mask_dict
     
     # Check if the grad dictionary exists
     if grad_dict_path is not None and os.path.exists(grad_dict_path):
         grad_dict = torch.load(grad_dict_path, map_location=device)
-        print(f"Loaded SelFT grad dictionary from {grad_dict_path}")
+        print(f"Loaded SelFT grad dictionary from '{grad_dict_path}'")
     else:
         # Get gradient for trainable parameters
         grad_dict = selft_get_score(pipeline.unet, prompt_list, anchor, loss, device, pipeline.text_encoder, pipeline.tokenizer)
@@ -81,7 +81,7 @@ def get_selft_mask_dict(pipeline, mask_dict_path, grad_dict_path, prompt_list, a
         if grad_dict_path is not None:
             os.makedirs(os.path.dirname(grad_dict_path), exist_ok=True)
             torch.save(grad_dict, grad_dict_path)
-            print(f"Saved SelFT grad_dict to {grad_dict_path}")
+            print(f"Saved SelFT grad_dict to '{grad_dict_path}'")
     
     # Flattened list of all scores
     mask_dict = {}
@@ -205,7 +205,8 @@ def selft_get_score(unet, prompt_list, anchor, loss, device, text_encoder, token
         timesteps = scheduler.timesteps
 
         # Iterate through timesteps
-        for t_idx in tqdm(range(min(ddim_steps, len(timesteps)))):
+        progress_bar = tqdm(range(min(ddim_steps, len(timesteps))), desc="Training")
+        for t_idx in progress_bar:
             with torch.no_grad():
                 # Initialize random latents for first iteration
                 if t_idx == 0:
@@ -272,7 +273,7 @@ def selft_get_score(unet, prompt_list, anchor, loss, device, text_encoder, token
             
             # Backpropagate
             obj.backward()
-            print(f"{t_idx}. Loss: {obj.item()}")
+            progress_bar.set_postfix(loss=obj.item())
             
             # Accumulate gradients
             for name, param in unet.named_parameters():
@@ -286,7 +287,7 @@ def selft_get_score(unet, prompt_list, anchor, loss, device, text_encoder, token
         print(f"Gradient L2 norms for {target} to {anchor}:")
         for name, grad in grad_dict.items():
             l2_norm = torch.norm(grad).item()
-            print(f"{name}: {l2_norm}")
+            print(f"\t{name}: {l2_norm}")
         
         # Append the gradient dictionary for this target-anchor pair
         all_grad_dicts.append(grad_dict)
@@ -313,7 +314,7 @@ def selft_get_score(unet, prompt_list, anchor, loss, device, text_encoder, token
     print(f"\nFinal averaged L2 norms:")
     for name, grad in averaged_grad_dict.items():
         l2_norm = torch.norm(grad).item()
-        print(f"  {name}: {l2_norm:.6f}")
+        print(f"\t{name}: {l2_norm:.6f}")
 
     return averaged_grad_dict
 

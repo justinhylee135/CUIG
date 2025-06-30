@@ -25,10 +25,12 @@ python train_esd.py \
 
 #### Object
 #### Celebrity
+
 ### Continual
 #### Style
 #### Object
 #### Celebrity
+
 ### Simultaneous
 #### Style
 ```bash
@@ -41,9 +43,46 @@ python train_esd.py \
 --eval_every 100 \
 --classifier_dir $REPO_ROOT/Evaluation/UnlearnCanvas/classifiers
 ```
-#### Style
 #### Object
 #### Celebrity
+
+### Regularization: L1
+#### Style
+```bash
+python train_esd.py \
+--concept 'Abstractionism' \
+--concept_type 'style' \
+--train_method 'xattn' \
+--save_path $OUTPUT_ROOT/esd/models/continual/l1sp/style/100/thruAbstractionism.pth \
+--base_model_dir $BASE_MODEL_DIR \
+--l1sp_weight 100
+```
+
+### Regularization: L2
+#### Style
+```bash
+python train_esd.py \
+--concept 'Abstractionism' \
+--concept_type 'style' \
+--train_method 'xattn' \
+--save_path $OUTPUT_ROOT/esd/models/continual/l1sp/style/300000/thruAbstractionism.pth \
+--base_model_dir $BASE_MODEL_DIR \
+--l1sp_weight 300000
+```
+
+### Selective Finetuning (SelFT)
+#### Style
+```bash
+python train_esd.py \
+--concept 'Abstractionism' \
+--concept_type 'style' \
+--train_method 'xattn' \
+--save_path $OUTPUT_ROOT/esd/models/continual/selft/style/0.01/thruAbstractionism/thruAbstractionism.pth \
+--base_model_dir $BASE_MODEL_DIR \
+--selft_loss 'esd' \
+--selft_topk 0.01 \
+--selft_grad_dict_path $OUTPUT_ROOT/esd/models/continual/selft/style/0.01/thruAbstractionism/grad_dict.pth
+```
 
 ---
 

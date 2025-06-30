@@ -45,4 +45,24 @@ python evaluate.py \
 --retain '["Blossom_Season","Rust","Crayon","Fauvism","Superstring","Red_Blue_Ink", "Gorgeous_Love", "French", "Joy", "Greenfield", "Expressionism", "Impressionism"]' \
 --cross_retain '["Architectures", "Butterfly", "Flame", "Flowers", "Horses", "Human", "Sea", "Trees"]'
 ```
+
+#### Merge
+```bash
+python sample.py \
+--unet_ckpt_path /fs/scratch/PAS2099/lee.10369/CUIG/esd/models/independent/merge/ties/style/lambda1.70_topk0.80/thruVibrantFlow.pth \
+--output_dir /fs/scratch/PAS2099/lee.10369/CUIG/esd/eval_results/independent/merge/ties/style/lambda1.70_topk0.80/thruVibrantFlow/images \
+--styles_subset '["Abstractionism", "Byzantine", "Cartoon", "Cold_Warm", "Ukiyoe", "Van_Gogh", "Neon_Lines", "Picasso", "On_Fire", "Magic_Cube", "Winter", "Vibrant_Flow", "Blossom_Season","Rust","Crayon","Fauvism","Superstring","Red_Blue_Ink", "Gorgeous_Love", "French", "Joy", "Greenfield", "Expressionism", "Impressionism"]' \
+--objects_subset '["Architectures", "Butterfly", "Flame", "Flowers", "Horses", "Human", "Sea", "Trees"]' \
+--pipeline_dir $BASE_MODEL_DIR 
+```
+
+```bash
+python evaluate.py \
+--input_dir /fs/scratch/PAS2099/lee.10369/CUIG/esd/eval_results/independent/merge/ties/style/lambda1.70_topk0.80/thruVibrantFlow/images \
+--output_dir /fs/scratch/PAS2099/lee.10369/CUIG/esd/eval_results/independent/merge/ties/style/lambda1.70_topk0.80/thruVibrantFlow/metrics \
+--classifier_dir $REPO_ROOT/Evaluation/UnlearnCanvas/classifiers \
+--unlearn '["Abstractionism", "Byzantine", "Cartoon", "Cold_Warm", "Ukiyoe", "Van_Gogh", "Neon_Lines", "Picasso", "On_Fire", "Magic_Cube", "Winter", "Vibrant_Flow"]' \
+--retain '["Blossom_Season","Rust","Crayon","Fauvism","Superstring","Red_Blue_Ink", "Gorgeous_Love", "French", "Joy", "Greenfield", "Expressionism", "Impressionism"]' \
+--cross_retain '["Architectures", "Butterfly", "Flame", "Flowers", "Horses", "Human", "Sea", "Trees"]'
+```
 ---

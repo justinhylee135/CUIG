@@ -12,7 +12,7 @@ from tqdm import tqdm
 from diffusers import StableDiffusionPipeline, UNet2DConditionModel
 
 # Local
-from ties import ties_merge, apply_dare
+from ties import ties_merge
 from uniform import uniform_merge
 from task_arithmetic import task_arithmetic_merge
 
@@ -66,7 +66,7 @@ def main():
         help="Lambda scaling factor for TIES merging"
     )
     parser.add_argument(
-        "--ties_top_k", 
+        "--ties_topk", 
         type=float, 
         default=0.3,
         help="Top-K fraction for TIES merging"
@@ -107,9 +107,9 @@ def main():
     ckpt_state_dicts = []
     for i, ckpt_path in enumerate(checkpoint_paths, start=1):
         if not Path(ckpt_path).exists(): raise FileNotFoundError(f"Checkpoint {ckpt_path} does not exist")
-        print(f"{i}. {ckpt_path}...")
-        unet = torch.load(ckpt_path, map_location=args.device)
-        ckpt_state_dicts.append(unet.state_dict())
+        print(f"{i}. '{ckpt_path}'")
+        unet_state_dict = torch.load(ckpt_path, map_location=args.device, weights_only=False)
+        ckpt_state_dicts.append(unet_state_dict)
     print(f"Loaded {len(ckpt_state_dicts)} checkpoints to device '{args.device}'")
     
     # Perform merging
@@ -135,7 +135,7 @@ def main():
             ckpt_state_dicts,
             args.key_filter,
             args.ties_lambda,
-            args.ties_top_k,
+            args.ties_topk,
             args.ties_merge_func
         )
     

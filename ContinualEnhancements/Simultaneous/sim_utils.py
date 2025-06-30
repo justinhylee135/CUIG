@@ -311,16 +311,16 @@ def sample_and_evaluate_ua(pipeline, concept_type, iteration, model_save_path, p
     # Return the average unlearn accuracy
     return round(unlearn_accuracy_avg, 2)
 
-def check_early_stopping(ua, best_ua, no_improvement_count, patience):
+def check_early_stopping(ua, best_ua, no_improvement_count, eval_every, patience):
     """ Check if early stopping conditions are met """
     # Update best UA 
     if ua > best_ua:
         best_ua = ua
         no_improvement_count = 0
-        print(f"New best Unlearned Accuracy: {best_ua}")
+        print(f"New best Unlearned Accuracy: '{best_ua}'")
     else:
-        no_improvement_count += 1
-        print(f"No improvement count: {no_improvement_count} with patience {patience}")
+        no_improvement_count += eval_every
+        print(f"No improvement count: '{no_improvement_count}' iterations with patience '{patience}'")
     
     # Check stopping conditions
     stop_training = False
