@@ -31,8 +31,7 @@ from ContinualEnhancements.Regularization.l2sp import calculate_l2sp_loss
 ### SelFT
 from ContinualEnhancements.SelFT.selft_utils import (
     get_selft_mask_dict,
-    apply_selft_masks,
-    selft_get_score
+    apply_selft_masks
 )
     
 
@@ -56,11 +55,12 @@ if __name__ == '__main__':
     parser.add_argument('--iterations', help='Number of iterations used to train', type=int, required=False, default=1000)
     parser.add_argument('--lr', help='Learning rate', type=str, required=False, default=None)
     parser.add_argument('--devices', help='CUDA devices used for loading frozen and esd unet', type=str, required=False, default='0,0')
-
+    
     # Input/Output
     parser.add_argument('--base_model_dir', help='Directory to diffusers pipeline', type=str, required=False, default='CompVis/stable-diffusion-v1-4')
     parser.add_argument('--save_path', help='output directory to save results', type=str, required=True)
     parser.add_argument('--unet_ckpt', help='Path to UNet checkpoint to load for continual unlearning', type=str, required=False, default=None)
+    parser.add_argument('--verbose', help='Print verbose output', action='store_true', default=False)
     
     # Continual Enhancements
     ## Simultaneous
@@ -109,12 +109,11 @@ if __name__ == '__main__':
     i = 1
     for name, param in pipeline.unet.named_parameters():
         if name in updatable_params:
-            print(f"{i}. {name}")
+            if args.verbose: print(f"{i}. {name}")
             param.requires_grad = True
             i+=1
         else:
             param.requires_grad = False
-    pipeline.unet.train()
 
     # Set up training parameters
     lr = args.lr
@@ -132,12 +131,16 @@ if __name__ == '__main__':
     frz_pipeline.scheduler.set_timesteps(args.ddim_steps)
     print(f"Using negative_guidance: {args.negative_guidance}")
     
-    # Early stopping
+    # Simultaneous Unlearning (Early Stopping)
     if args.eval_every is not None:
         if args.classifier_dir is None: raise ValueError("Classifier directory must be specified for early stopping evaluation.")
         print(f"Using early stopping with patience {args.patience} and eval_every {args.eval_every} instead of {args.iterations} iterations")
         best_ua = 0.0
         no_improvement_count = 0
+    
+    # Print Regularization settings (if selected)
+    if args.l1sp_weight > 0.0: print(f"Using L1SP regularizer with weight '{args.l1sp_weight}'")
+    if args.l2sp_weight > 0.0: print(f"Using L2SP regularizer with weight '{args.l2sp_weight}'")
     
     # Initialize SelFT variables
     selft_device = args.devices[0]
@@ -161,7 +164,9 @@ if __name__ == '__main__':
         # Apply SelFT masks via gradient hooks
         grad_hooks = apply_selft_masks(pipeline.unet, selft_mask_dict)
         print(f"Applied SelFT masks with {len(grad_hooks)} hooks")
-        
+    
+    # Start Training
+    pipeline.unet.train()
     stop_training = False
     iteration = 0
     with tqdm(total=args.iterations, desc="Training", unit="iteration") as pbar:
@@ -238,7 +243,7 @@ if __name__ == '__main__':
             opt.step()
             
             # Log progress (add regularizer losses if they exist)
-            pbar_postfix = {"loss": loss.item(), "timestep": timestep_idx, "prompt": prompt}
+            pbar_postfix = {"loss": loss.item(), "timestep": timestep_idx, "prompt": f"'{prompt}'"}
             if l1sp_loss is not None: pbar_postfix["l1sp_loss"] = l1sp_loss.item()
             if l2sp_loss is not None: pbar_postfix["l2sp_loss"] = l2sp_loss.item()
             pbar.set_postfix(pbar_postfix)

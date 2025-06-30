@@ -77,11 +77,11 @@ python train_esd.py \
 --concept 'Abstractionism' \
 --concept_type 'style' \
 --train_method 'xattn' \
---save_path $OUTPUT_ROOT/esd/models/continual/selft/style/0.01/thruAbstractionism/thruAbstractionism.pth \
+--save_path $OUTPUT_ROOT/esd/models/continual/selft/style/0.01/thruAbstractionism.pth \
 --base_model_dir $BASE_MODEL_DIR \
 --selft_loss 'esd' \
 --selft_topk 0.01 \
---selft_grad_dict_path $OUTPUT_ROOT/esd/models/continual/selft/style/0.01/thruAbstractionism/grad_dict.pth
+--selft_grad_dict_path $OUTPUT_ROOT/esd/models/continual/selft/style/0.01/thruAbstractionism_grad_dict.pth
 ```
 
 ---

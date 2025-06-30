@@ -284,7 +284,7 @@ def selft_get_score(unet, prompt_list, anchor, loss, device, text_encoder, token
             unet.zero_grad()
 
         # Calculate and print the L2 norm for each item in grad_dict
-        print(f"Gradient L2 norms for {target} to {anchor}:")
+        print(f"'{len(grad_dict)}' Gradient L2 norms for '{target}' to '{anchor}':")
         for name, grad in grad_dict.items():
             l2_norm = torch.norm(grad).item()
             print(f"\t{name}: {l2_norm}")
@@ -293,7 +293,7 @@ def selft_get_score(unet, prompt_list, anchor, loss, device, text_encoder, token
         all_grad_dicts.append(grad_dict)
     
     # Average gradients across all prompts
-    print(f"\nAveraging gradients across {num_prompts} prompts...")
+    print(f"\nAveraging gradients across '{num_prompts}' prompts...")
     averaged_grad_dict = {}
     
     # Initialize with zeros
@@ -311,7 +311,7 @@ def selft_get_score(unet, prompt_list, anchor, loss, device, text_encoder, token
         averaged_grad_dict[name] = averaged_grad_dict[name] / num_prompts
 
     # Print final averaged L2 norms
-    print(f"\nFinal averaged L2 norms:")
+    print(f"\n'{len(averaged_grad_dict)}' Final averaged L2 norms:")
     for name, grad in averaged_grad_dict.items():
         l2_norm = torch.norm(grad).item()
         print(f"\t{name}: {l2_norm:.6f}")
