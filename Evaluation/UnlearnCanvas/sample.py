@@ -70,7 +70,8 @@ if __name__ == '__main__':
     for key in keys_list:
         if key.startswith("unet."):
             unet_state_dict[key.replace("unet.", "")] = unet_state_dict.pop(key)
-    
+    if "unet" in unet_state_dict:
+        unet_state_dict = unet_state_dict["unet"]
     missing, unexpected = pipe.unet.load_state_dict(unet_state_dict, strict=False)
     print(f"Loaded UNet from {args.unet_ckpt_path}")
     print(f"Loaded keys: {len(unet_state_dict)}")

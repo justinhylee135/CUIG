@@ -58,11 +58,11 @@ python sample.py \
 
 ```bash
 python evaluate.py \
---input_dir /fs/scratch/PAS2099/lee.10369/CUIG/esd/eval_results/independent/merge/ties/style/lambda1.70_topk0.80/thruVibrantFlow/images \
---output_dir /fs/scratch/PAS2099/lee.10369/CUIG/esd/eval_results/independent/merge/ties/style/lambda1.70_topk0.80/thruVibrantFlow/metrics \
+--input_dir /fs/scratch/PAS2099/lee.10369/CUIG/esd/eval_results/independent/merge/ties/object/lambda2.00_topk0.20/thruWaterfalls/images \
+--output_dir /fs/scratch/PAS2099/lee.10369/CUIG/esd/eval_results/independent/merge/ties/object/lambda2.00_topk0.20/thruWaterfalls/metrics \
 --classifier_dir $REPO_ROOT/Evaluation/UnlearnCanvas/classifiers \
---unlearn '["Abstractionism", "Byzantine", "Cartoon", "Cold_Warm", "Ukiyoe", "Van_Gogh", "Neon_Lines", "Picasso", "On_Fire", "Magic_Cube", "Winter", "Vibrant_Flow"]' \
---retain '["Blossom_Season","Rust","Crayon","Fauvism","Superstring","Red_Blue_Ink", "Gorgeous_Love", "French", "Joy", "Greenfield", "Expressionism", "Impressionism"]' \
---cross_retain '["Architectures", "Butterfly", "Flame", "Flowers", "Horses", "Human", "Sea", "Trees"]'
+--unlearn '["Bears", "Birds", "Cats", "Dogs", "Fishes", "Frogs", "Jellyfish", "Rabbits", "Sandwiches", "Statues", "Towers", "Waterfalls"]' \
+--cross_retain '["Blossom_Season","Rust","Crayon","Fauvism","Superstring","Red_Blue_Ink", "Gorgeous_Love", "French", "Joy", "Greenfield", "Expressionism", "Impressionism"]' \
+--retain '["Architectures", "Butterfly", "Flame", "Flowers", "Horses", "Human", "Sea", "Trees"]'
 ```
 ---

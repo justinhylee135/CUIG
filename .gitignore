@@ -4,3 +4,4 @@ Evaluation/UnlearnCanvas/classifiers/*.pth
 __pycache__
 cache
 cad_temp
+anchor_datasets

@@ -1,9 +1,6 @@
 # Standard Library Imports
 import argparse
-import hashlib
 import itertools
-import json
-import logging
 import math
 import os
 import warnings
@@ -13,16 +10,14 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn.functional as F
-import torch.utils.checkpoint
-import transformers
-from accelerate import Accelerator
 from accelerate.logging import get_logger
-from accelerate.utils import ProjectConfiguration, set_seed
-from huggingface_hub import HfApi, create_repo
+from accelerate.utils import set_seed
+from huggingface_hub import HfApi
 from packaging import version
 from tqdm.auto import tqdm
-from transformers import AutoTokenizer, PretrainedConfig
+from transformers import AutoTokenizer
 
+## Diffusers
 import diffusers
 from diffusers import (
     AutoencoderKL,
@@ -31,23 +26,27 @@ from diffusers import (
     DPMSolverMultistepScheduler,
     UNet2DConditionModel,
 )
-from diffusers.models.attention import Attention as CrossAttention
 from diffusers.optimization import get_scheduler
 from diffusers.utils import check_min_version, is_wandb_available
 from diffusers.utils.import_utils import is_xformers_available
 
 # Local Imports
 from src.model import (
-    CustomDiffusionAttnProcessor,
     CustomDiffusionPipeline,
-    set_use_memory_efficient_attention_xformers,
+    create_custom_diffusion,
+    save_model_card,
+    import_model_class_from_model_name_or_path,
+    freeze_params
+)
+from src.data import (
+    CustomDiffusionDataset,
+    collate_fn,
+    generate_anchor_images_if_needed
 )
 from src.utils import (
-    CustomDiffusionDataset,
-    PromptDataset,
-    collate_fn,
-    filter,
-    getanchorprompts,
+    setup_accelerator_and_logging,
+    setup_concepts_list,
+    setup_hub_repository
 )
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
@@ -55,111 +54,36 @@ check_min_version("0.14.0")
 
 logger = get_logger(__name__)
 
-def create_custom_diffusion(unet, parameter_group):
-    for name, params in unet.named_parameters():
-        if parameter_group == "cross-attn":
-            if "attn2.to_k" in name or "attn2.to_v" in name:
-                params.requires_grad = True
-            else:
-                params.requires_grad = False
-        elif parameter_group == "attn":
-            if "to_q" in name or "to_k" in name or "to_v" in name or "to_out" in name:
-                print(name)
-                params.requires_grad = True
-            else:
-                params.requires_grad = False
-        elif parameter_group == "full-weight":
-            params.requires_grad = True
-        elif parameter_group == "embedding":
-            params.requires_grad = False
-        else:
-            raise ValueError(
-                "parameter_group argument only cross-attn, full-weight, embedding"
-            )
-
-    # change attn class
-    def change_attn(unet):
-        for layer in unet.children():
-            if type(layer) == CrossAttention:
-                bound_method = set_use_memory_efficient_attention_xformers.__get__(
-                    layer, layer.__class__
-                )
-                setattr(
-                    layer, "set_use_memory_efficient_attention_xformers", bound_method
-                )
-            else:
-                change_attn(layer)
-
-    change_attn(unet)
-    unet.set_attn_processor(CustomDiffusionAttnProcessor())
-    return unet
-
-
-def save_model_card(
-    repo_id: str, images=None, base_model=str, prompt=str, repo_folder=None
-):
-    img_str = ""
-    for i, image in enumerate(images):
-        image.save(os.path.join(repo_folder, f"image_{i}.png"))
-        img_str += f"./image_{i}.png\n"
-
-    yaml = f"""
-        ---
-        license: creativeml-openrail-m
-        base_model: {base_model}
-        instance_prompt: {prompt}
-        tags:
-        - stable-diffusion
-        - stable-diffusion-diffusers
-        - text-to-image
-        - diffusers
-        - custom diffusion
-        inference: true
-        ---
-            """
-    model_card = f"""
-        # Custom Diffusion - {repo_id}
-
-        These are Custom Diffusion adaption weights for {base_model}. The weights were trained on {prompt} using [Custom Diffusion](https://www.cs.cmu.edu/~custom-diffusion). You can find some example images in the following. \n
-        {img_str[0]}
-        """
-    with open(os.path.join(repo_folder, "README.md"), "w") as f:
-        f.write(yaml + model_card)
-
-
-def import_model_class_from_model_name_or_path(
-    pretrained_model_name_or_path: str, revision: str
-):
-    text_encoder_config = PretrainedConfig.from_pretrained(
-        pretrained_model_name_or_path,
-        subfolder="text_encoder",
-        revision=revision,
-    )
-    model_class = text_encoder_config.architectures[0]
-
-    if model_class == "CLIPTextModel":
-        from transformers import CLIPTextModel
-
-        return CLIPTextModel
-    elif model_class == "RobertaSeriesModelWithTransformation":
-        from diffusers.pipelines.alt_diffusion.modeling_roberta_series import (
-            RobertaSeriesModelWithTransformation,
-        )
-
-        return RobertaSeriesModelWithTransformation
-    else:
-        raise ValueError(f"{model_class} is not supported.")
-
-
-def freeze_params(params):
-    for param in params:
-        param.requires_grad = False
-
-
 def parse_args(input_args=None):
     parser = argparse.ArgumentParser(description="Simple example of a training script.")
+    # Custom Training Arguments
     parser.add_argument(
-        "--pretrained_model_name_or_path",
+        "--unet_ckpt",
+        type=str,
+        default=None,
+        help="Path to previous timestep UNet checkpoint.",
+    )
+    parser.add_argument(
+        "--turn_on_checkpointing",
+        action="store_true",
+        help=(
+            "Whether to turn on checkpointing. If set, the training state will be saved every `checkpointing_steps`."
+            " This is useful for resuming training in case of interruptions."
+        ),
+        default=False
+    )
+    parser.add_argument(
+        "--turn_on_validation",
+        action="store_true",
+        help=(
+            "Whether to turn on validation. If set, the model will be validated every `validation_steps`."
+            " This is useful for monitoring the training progress and ensuring that the model is learning."
+        ),
+        default=False
+    )
+    # Default Arguments Below
+    parser.add_argument(
+        "--base_model_dir",
         type=str,
         default=None,
         required=True,
@@ -182,7 +106,7 @@ def parse_args(input_args=None):
         "--concept_type",
         type=str,
         required=True,
-        choices=["style", "object", "memorization", "nudity", "inappropriate_content"],
+        choices=["style", "object", "celebrity", "memorization", "nudity", "inappropriate_content"],
         help="the type of removed concepts",
     )
     parser.add_argument(
@@ -194,7 +118,7 @@ def parse_args(input_args=None):
     parser.add_argument(
         "--prompt_gen_model",
         type=str,
-        default="meta-llama",
+        default="openai",
         choices=["openai", "meta-llama"],
         help="the type of model to generate anchor prompts",
     )
@@ -263,7 +187,7 @@ def parse_args(input_args=None):
     parser.add_argument(
         "--train_size",
         type=int,
-        default=1000,
+        default=200,
         help="the number of generated images used for ablating the concept",
     )
     parser.add_argument(
@@ -275,7 +199,7 @@ def parse_args(input_args=None):
     parser.add_argument(
         "--num_class_images",
         type=int,
-        default=1000,
+        default=200,
         help=(
             "Minimal anchor class images. If there are not enough images already present in"
             " class_data_dir, additional images will be sampled with class_prompt."
@@ -370,7 +294,7 @@ def parse_args(input_args=None):
     parser.add_argument(
         "--learning_rate",
         type=float,
-        default=1e-5,
+        default=2.0e-06,
         help="Initial learning rate (after the potential warmup period) to use.",
     )
     parser.add_argument(
@@ -481,7 +405,7 @@ def parse_args(input_args=None):
     parser.add_argument(
         "--report_to",
         type=str,
-        default="tensorboard",
+        default=None,
         help=(
             'The integration to report the results and logs to. Supported platforms are `"tensorboard"`'
             ' (default), `"wandb"` and `"comet_ml"`. Use `"all"` to report to all integrations.'
@@ -543,6 +467,7 @@ def parse_args(input_args=None):
     if env_local_rank != -1 and env_local_rank != args.local_rank:
         args.local_rank = env_local_rank
 
+    # Check arguments for target to anchor mapping
     if args.with_prior_preservation:
         if args.concepts_list is None:
             if args.class_data_dir is None:
@@ -562,222 +487,25 @@ def parse_args(input_args=None):
 
     return args
 
-
+ 
 def main(args):
-    logging_dir = Path(args.output_dir, args.logging_dir)
+    # Set up Logging and Accelerator
+    accelerator, logger = setup_accelerator_and_logging(args)
 
-    accelerator_project_config = ProjectConfiguration(
-        total_limit=args.checkpoints_total_limit
-    )
-    accelerator = Accelerator(
-        gradient_accumulation_steps=args.gradient_accumulation_steps,
-        mixed_precision=args.mixed_precision,
-        log_with=args.report_to,
-        project_dir=logging_dir,
-        project_config=accelerator_project_config,
-    )
+    # Set seed 
+    if args.seed is not None: set_seed(args.seed)
+    
+    # Setup concepts list
+    setup_concepts_list(args)
 
-    if args.report_to == "wandb":
-        if not is_wandb_available():
-            raise ImportError(
-                "Make sure to install wandb if you want to use it for logging during training."
-            )
-        import wandb
+    # Generate dataset for anchor images if needed
+    generate_anchor_images_if_needed(args, accelerator, logger)
 
-    # Currently, it's not possible to do gradient accumulation when training two models with accelerate.accumulate
-    # This will be enabled soon in accelerate. For now, we don't allow gradient accumulation when training two models.
-    # TODO (patil-suraj): Remove this check when gradient accumulation with two models is enabled in accelerate.
-    # Make one log on every process with the configuration for debugging.
-    logging.basicConfig(
-        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
-        datefmt="%m/%d/%Y %H:%M:%S",
-        level=logging.INFO,
-    )
-    logger.info(accelerator.state, main_process_only=False)
-    if accelerator.is_local_main_process:
-        transformers.utils.logging.set_verbosity_warning()
-        diffusers.utils.logging.set_verbosity_info()
-    else:
-        transformers.utils.logging.set_verbosity_error()
-        diffusers.utils.logging.set_verbosity_error()
-
-    # We need to initialize the trackers we use, and also store our configuration.
-    # The trackers initializes automatically on the main process.
+    # Create output directory and huggingface repo (if selected)
     if accelerator.is_main_process:
-        print(vars(args))
-        accelerator.init_trackers("concept-ablation", config=vars(args))
-
-    # If passed along, set the training seed now.
-    if args.seed is not None:
-        set_seed(args.seed)
-    if args.concepts_list is None:
-        args.concepts_list = [
-            {
-                "instance_prompt": args.instance_prompt,
-                "class_prompt": args.class_prompt,
-                "instance_data_dir": args.instance_data_dir,
-                "class_data_dir": args.class_data_dir,
-                "caption_target": args.caption_target,
-            }
-        ]
-    else:
-        with open(args.concepts_list, "r") as f:
-            args.concepts_list = json.load(f)
-
-    # Generate class images if prior preservation is enabled.
-    for i, concept in enumerate(args.concepts_list):
-        # directly path to ablation images and its corresponding prompts is provided.
-        if (
-            concept["instance_prompt"] is not None
-            and concept["instance_data_dir"] is not None
-        ):
-            break
-
-        class_images_dir = Path(concept["class_data_dir"])
-        if not class_images_dir.exists():
-            class_images_dir.mkdir(parents=True, exist_ok=True)
-        os.makedirs(f"{class_images_dir}/images", exist_ok=True)
-
-        # we need to generate training images
-        if (
-            len(list(Path(os.path.join(class_images_dir, "images")).iterdir()))
-            < args.num_class_images
-        ):
-            torch_dtype = (
-                torch.float16 if accelerator.device.type == "cuda" else torch.float32
-            )
-            if args.prior_generation_precision == "fp32":
-                torch_dtype = torch.float32
-            elif args.prior_generation_precision == "fp16":
-                torch_dtype = torch.float16
-            elif args.prior_generation_precision == "bf16":
-                torch_dtype = torch.bfloat16
-            pipeline = DiffusionPipeline.from_pretrained(
-                args.pretrained_model_name_or_path,
-                torch_dtype=torch_dtype,
-                safety_checker=None,
-                revision=args.revision,
-            )
-            pipeline.scheduler = DPMSolverMultistepScheduler.from_config(
-                pipeline.scheduler.config
-            )
-
-            pipeline.set_progress_bar_config(disable=True)
-            pipeline.to(accelerator.device)
-
-            # need to create prompts using class_prompt.
-            if not os.path.isfile(concept["class_prompt"]):
-                # style based prompts are retrieved from laion dataset
-                if args.concept_type in ["style"]:
-                    with open('../assets/finetune_prompts/painting.txt', 'r') as f:
-                            class_prompt_collection = [x.strip() for x in f.readlines()]
-                elif args.concept_type in ["nudity", "inappropriate_content"]:
-                    with open('../assets/finetune_prompts/people.txt', 'r') as f:
-                            class_prompt_collection = [x.strip() for x in f.readlines()]
-                elif args.class_prompt in ["robot", "cat", "fish", "dog"]:
-                    with open(f'../assets/finetune_prompts/{args.class_prompt}.txt', 'r') as f:
-                            class_prompt_collection = [x.strip() for x in f.readlines()]
-                # LLM based prompt collection for ablating new objects or memorization images
-                else:
-                    class_prompt = concept["class_prompt"]
-                    # in case of object query chatGPT to generate captions containing the anchor category
-                    class_prompt_collection, caption_target = getanchorprompts(
-                        pipeline,
-                        accelerator,
-                        class_prompt,
-                        args.concept_type,
-                        class_images_dir,
-                        args.num_class_prompts,
-                        mem_impath=args.mem_impath if args.concept_type == "memorization" else None,
-                        model_id=args.prompt_gen_model
-                    )
-                    concept["caption_target"] += f";*+{caption_target}"
-                    with open(class_images_dir / "caption_target.txt", "w") as f:
-                        f.write(concept["caption_target"])
-                    print(class_prompt_collection, concept["caption_target"])
-            # class_prompt is filepath to prompts.
-            else:
-                with open(concept["class_prompt"]) as f:
-                    class_prompt_collection = [x.strip() for x in f.readlines()]
-
-            num_new_images = args.num_class_images
-            logger.info(f"Number of class images to sample: {num_new_images}.")
-
-            sample_dataset = PromptDataset(class_prompt_collection, num_new_images)
-            sample_dataloader = torch.utils.data.DataLoader(
-                sample_dataset, batch_size=args.sample_batch_size
-            )
-
-            sample_dataloader = accelerator.prepare(sample_dataloader)
-
-            if os.path.exists(f"{class_images_dir}/caption.txt"):
-                os.remove(f"{class_images_dir}/caption.txt")
-            if os.path.exists(f"{class_images_dir}/images.txt"):
-                os.remove(f"{class_images_dir}/images.txt")
-
-            for example in tqdm(
-                sample_dataloader,
-                desc="Generating class images",
-                disable=not accelerator.is_local_main_process,
-            ):
-                accelerator.wait_for_everyone()
-                with open(f"{class_images_dir}/caption.txt", "a") as f1, open(
-                    f"{class_images_dir}/images.txt", "a"
-                ) as f2:
-                    images = pipeline(
-                        example["prompt"],
-                        num_inference_steps=25,
-                        guidance_scale=6.0,
-                        negative_prompt=[args.caption_target]*len(example["prompt"]) if args.concept_type in ["nudity", "inappropriate_content"] else None,
-                        eta=1.0,
-                    ).images
-
-                    for i, image in enumerate(images):
-                        hash_image = hashlib.sha1(image.tobytes()).hexdigest()
-                        image_filename = (
-                            class_images_dir
-                            / f"images/{example['index'][i]}-{hash_image}.jpg"
-                        )
-                        image.save(image_filename)
-                        f2.write(str(image_filename) + "\n")
-                    f1.write("\n".join(example["prompt"]) + "\n")
-                    accelerator.wait_for_everyone()
-
-            del pipeline
-
-        if args.concept_type == "memorization":
-            filter(
-                class_images_dir,
-                args.mem_impath,
-                outpath=str(class_images_dir / "filtered"),
-            )
-            with open(class_images_dir / "caption_target.txt", "r") as f:
-                concept["caption_target"] = f.readlines()[0].strip()
-            class_images_dir = class_images_dir / "filtered"
-
-        concept["class_prompt"] = os.path.join(class_images_dir, "caption.txt")
-        concept["class_data_dir"] = os.path.join(class_images_dir, "images.txt")
-        concept["instance_prompt"] = os.path.join(class_images_dir, "caption.txt")
-        concept["instance_data_dir"] = os.path.join(class_images_dir, "images.txt")
-
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-
-    # Handle the repository creation
-    if accelerator.is_main_process:
-        if args.output_dir is not None:
-            os.makedirs(args.output_dir, exist_ok=True)
-
-        if args.push_to_hub:
-            print(args.hub_model_id or Path(args.output_dir).name)
-            repo_id = create_repo(
-                repo_id=args.hub_model_id or Path(args.output_dir).name,
-                exist_ok=True,
-                token=args.hub_token,
-            )
-            print(repo_id)
-            repo_id = args.hub_model_id
-
+        if args.output_dir is not None: os.makedirs(args.output_dir, exist_ok=True)
+        repo_id = setup_hub_repository(args)
+        
     # Load the tokenizer
     if args.tokenizer_name:
         tokenizer = AutoTokenizer.from_pretrained(
@@ -785,9 +513,9 @@ def main(args):
             revision=args.revision,
             use_fast=False,
         )
-    elif args.pretrained_model_name_or_path:
+    elif args.base_model_dir:
         tokenizer = AutoTokenizer.from_pretrained(
-            args.pretrained_model_name_or_path,
+            args.base_model_dir,
             subfolder="tokenizer",
             revision=args.revision,
             use_fast=False,
@@ -795,23 +523,23 @@ def main(args):
 
     # import correct text encoder class
     text_encoder_cls = import_model_class_from_model_name_or_path(
-        args.pretrained_model_name_or_path, args.revision
+        args.base_model_dir, args.revision
     )
 
     # Load scheduler and models
     noise_scheduler = DDPMScheduler.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="scheduler"
+        args.base_model_dir, subfolder="scheduler"
     )
     text_encoder = text_encoder_cls.from_pretrained(
-        args.pretrained_model_name_or_path,
+        args.base_model_dir,
         subfolder="text_encoder",
         revision=args.revision,
     )
     vae = AutoencoderKL.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision
+        args.base_model_dir, subfolder="vae", revision=args.revision
     )
     unet = UNet2DConditionModel.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision
+        args.base_model_dir, subfolder="unet", revision=args.revision
     )
 
     vae.requires_grad_(False)
@@ -852,11 +580,13 @@ def main(args):
         unet.enable_gradient_checkpointing()
         if args.parameter_group == "embedding":
             text_encoder.gradient_checkpointing_enable()
+            
     # Enable TF32 for faster training on Ampere GPUs,
     # cf https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices
     if args.allow_tf32:
         torch.backends.cuda.matmul.allow_tf32 = True
 
+    # Scale base learning rate by other training factors
     if args.scale_lr:
         args.learning_rate = (
             args.learning_rate
@@ -883,6 +613,7 @@ def main(args):
     # Adding a modifier token which is optimized ####
     # Code taken from https://github.com/huggingface/diffusers/blob/main/examples/textual_inversion/textual_inversion.py
     modifier_token_id = []
+    # For text encoder finetuning
     if args.parameter_group == "embedding":
         assert (
             args.concept_type != "memorization"
@@ -908,6 +639,7 @@ def main(args):
             text_encoder.get_input_embeddings().parameters()
         )
     else:
+        # Key and Value of Cross Attention
         if args.parameter_group == "cross-attn":
             params_to_optimize = itertools.chain(
                 [
@@ -916,6 +648,7 @@ def main(args):
                     if ("attn2.to_k" in x[0] or "attn2.to_v" in x[0])
                 ]
             )
+        # Cross Attention
         elif args.parameter_group == "attn":
             params_to_optimize = itertools.chain(
                 [
@@ -924,6 +657,7 @@ def main(args):
                     if ("to_q" in x[0] or "to_k" in x[0] or "to_v" in x[0] or "to_out" in x[0] )
                 ]
             )
+        # All UNet parameters
         if args.parameter_group == "full-weight":
             params_to_optimize = itertools.chain(unet.parameters())
 
@@ -948,7 +682,6 @@ def main(args):
         hflip=args.hflip,
         aug=not args.noaug,
     )
-
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=args.train_batch_size,
@@ -1039,6 +772,12 @@ def main(args):
                 num_update_steps_per_epoch * args.gradient_accumulation_steps
             )
 
+    # Load UNet checkpoint for continual unlearning
+    if args.unet_ckpt:
+        print(f"Loading UNet checkpoint from '{args.unet_ckpt}'...")
+        accelerator.load_state(args.unet_ckpt)
+        print(f"Loaded UNet checkpoint from '{args.unet_ckpt}'")
+    
     # Only show the progress bar once on each machine.
     progress_bar = tqdm(
         range(global_step, args.max_train_steps),
@@ -1191,10 +930,10 @@ def main(args):
                 progress_bar.update(1)
                 global_step += 1
 
-                if global_step % args.checkpointing_steps == 0:
+                if args.turn_on_checkpointing and (global_step % args.checkpointing_steps == 0):
                     if accelerator.is_main_process:
                         pipeline = CustomDiffusionPipeline.from_pretrained(
-                            args.pretrained_model_name_or_path,
+                            args.base_model_dir,
                             unet=accelerator.unwrap_model(unet),
                             text_encoder=accelerator.unwrap_model(text_encoder),
                             tokenizer=tokenizer,
@@ -1218,6 +957,7 @@ def main(args):
 
         if accelerator.is_main_process:
             if (
+                args.turn_on_validation and
                 args.validation_prompt is not None
                 and global_step % args.validation_steps == 0
             ):
@@ -1227,7 +967,7 @@ def main(args):
                 )
                 # create pipeline
                 pipeline = CustomDiffusionPipeline.from_pretrained(
-                    args.pretrained_model_name_or_path,
+                    args.base_model_dir,
                     unet=accelerator.unwrap_model(unet),
                     text_encoder=accelerator.unwrap_model(text_encoder),
                     tokenizer=tokenizer,
@@ -1279,7 +1019,7 @@ def main(args):
     if accelerator.is_main_process:
         unet = unet.to(torch.float32)
         pipeline = CustomDiffusionPipeline.from_pretrained(
-            args.pretrained_model_name_or_path,
+            args.base_model_dir,
             unet=accelerator.unwrap_model(unet),
             text_encoder=accelerator.unwrap_model(text_encoder),
             tokenizer=tokenizer,
@@ -1290,7 +1030,7 @@ def main(args):
         pipeline.save_pretrained(save_path, parameter_group=args.parameter_group)
 
         # run inference
-        if args.validation_prompt and args.num_validation_images > 0:
+        if args.turn_on_validation and args.validation_prompt and args.num_validation_images > 0:
             pipeline.scheduler = DPMSolverMultistepScheduler.from_config(
                 pipeline.scheduler.config
             )
@@ -1333,7 +1073,7 @@ def main(args):
             save_model_card(
                 repo_id,
                 images=images,
-                base_model=args.pretrained_model_name_or_path,
+                base_model=args.base_model_dir,
                 prompt=args.instance_prompt,
                 repo_folder=args.output_dir,
             )

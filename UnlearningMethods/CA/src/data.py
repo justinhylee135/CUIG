@@ -1,7 +1,11 @@
+# Standard Library Imports
 import os
 import random
 import shutil
 from pathlib import Path
+import hashlib
+
+# Third Party Imports
 import numpy as np
 import openai
 import regex as re
@@ -11,8 +15,7 @@ from torch.utils.data import Dataset
 from torchvision import transforms
 from tqdm.auto import tqdm
 import transformers
-
-from diffusers import DPMSolverMultistepScheduler
+from diffusers import DPMSolverMultistepScheduler, DiffusionPipeline
 
 normalize = transforms.Normalize(
     mean=[0.485, 0.456, 0.406],
@@ -368,6 +371,193 @@ def filter(
     return anchor_prompts, target_prompts, len(filtered_paths)
 
 
+def generate_anchor_images_if_needed(args, accelerator, logger):
+    """
+    Generate anchor images if prior preservation is enabled and images don't exist.
+
+    Args:
+        args: Arguments object containing configuration parameters
+        accelerator: Accelerator object for distributed training
+        logger: Logger for info messages
+        
+    Returns:
+        None: Modifies args.concepts_list in place
+    """
+    # Generate class images if prior preservation is enabled.
+    for i, concept in enumerate(args.concepts_list):
+        # directly path to ablation images and its corresponding prompts is provided.
+        if (
+            concept["instance_prompt"] is not None
+            and concept["instance_data_dir"] is not None
+        ):
+            break
+
+        class_images_dir = Path(concept["class_data_dir"])
+        if not class_images_dir.exists():
+            class_images_dir.mkdir(parents=True, exist_ok=True)
+        os.makedirs(f"{class_images_dir}/images", exist_ok=True)
+
+        # we need to generate training images
+        if (
+            len(list(Path(os.path.join(class_images_dir, "images")).iterdir()))
+            < args.num_class_images
+        ):
+            pipeline = _setup_generation_pipeline(args, accelerator)
+            class_prompt_collection = _get_class_prompt_collection(
+                args, concept, class_images_dir, pipeline, accelerator
+            )
+            _generate_images_from_prompts(
+                args, concept, class_prompt_collection, class_images_dir, 
+                pipeline, accelerator, logger
+            )
+            del pipeline
+
+        # Handle memorization filtering
+        if args.concept_type == "memorization":
+            class_images_dir = _handle_memorization_filtering(
+                args, concept, class_images_dir
+            )
+
+        # Update concept paths
+        _update_concept_paths(concept, class_images_dir)
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+
+def _setup_generation_pipeline(args, accelerator):
+    """Set up the diffusion pipeline for image generation."""
+    torch_dtype = (
+        torch.float16 if accelerator.device.type == "cuda" else torch.float32
+    )
+    if args.prior_generation_precision == "fp32":
+        torch_dtype = torch.float32
+    elif args.prior_generation_precision == "fp16":
+        torch_dtype = torch.float16
+    elif args.prior_generation_precision == "bf16":
+        torch_dtype = torch.bfloat16
+        
+    pipeline = DiffusionPipeline.from_pretrained(
+        args.base_model_dir,
+        torch_dtype=torch_dtype,
+        safety_checker=None,
+        revision=args.revision,
+    )
+    pipeline.scheduler = DPMSolverMultistepScheduler.from_config(
+        pipeline.scheduler.config
+    )
+    pipeline.set_progress_bar_config(disable=True)
+    pipeline.to(accelerator.device)
+    
+    return pipeline
+
+
+def _get_class_prompt_collection(args, concept, class_images_dir, pipeline, accelerator):
+    """Get collection of prompts for class image generation."""
+    # need to create prompts using class_prompt.
+    if not os.path.isfile(concept["class_prompt"]):
+        # style based prompts are retrieved from laion dataset
+        if args.concept_type in ["style"]:
+            with open('../assets/finetune_prompts/painting.txt', 'r') as f:
+                class_prompt_collection = [x.strip() for x in f.readlines()]
+        elif args.concept_type in ["nudity", "inappropriate_content"]:
+            with open('../assets/finetune_prompts/people.txt', 'r') as f:
+                class_prompt_collection = [x.strip() for x in f.readlines()]
+        elif concept["class_prompt"] in ["robot", "cat", "fish", "dog"]:
+            with open(f'../assets/finetune_prompts/{concept["class_prompt"]}.txt', 'r') as f:
+                class_prompt_collection = [x.strip() for x in f.readlines()]
+        # LLM based prompt collection for ablating new objects or memorization images
+        else:
+            class_prompt = concept["class_prompt"]
+            # in case of object query chatGPT to generate captions containing the anchor category
+            class_prompt_collection, caption_target = getanchorprompts(
+                pipeline,
+                accelerator,
+                class_prompt,
+                args.concept_type,
+                class_images_dir,
+                args.num_class_prompts,
+                mem_impath=args.mem_impath if args.concept_type == "memorization" else None,
+                model_id=args.prompt_gen_model
+            )
+            concept["caption_target"] += f";*+{caption_target}"
+            with open(class_images_dir / "caption_target.txt", "w") as f:
+                f.write(concept["caption_target"])
+            print(class_prompt_collection, concept["caption_target"])
+    # class_prompt is filepath to prompts.
+    else:
+        with open(concept["class_prompt"]) as f:
+            class_prompt_collection = [x.strip() for x in f.readlines()]
+    
+    return class_prompt_collection
+
+
+def _generate_images_from_prompts(args, concept, class_prompt_collection, 
+                                class_images_dir, pipeline, accelerator, logger):
+    """Generate images from the prompt collection."""
+    num_new_images = args.num_class_images
+    logger.info(f"Number of class images to sample: {num_new_images}.")
+
+    sample_dataset = PromptDataset(class_prompt_collection, num_new_images)
+    sample_dataloader = torch.utils.data.DataLoader(
+        sample_dataset, batch_size=args.sample_batch_size
+    )
+    sample_dataloader = accelerator.prepare(sample_dataloader)
+
+    # Clean up existing files
+    if os.path.exists(f"{class_images_dir}/captions.txt"):
+        os.remove(f"{class_images_dir}/captions.txt")
+    if os.path.exists(f"{class_images_dir}/images.txt"):
+        os.remove(f"{class_images_dir}/images.txt")
+
+    for example in tqdm(
+        sample_dataloader,
+        desc="Generating class images",
+        disable=not accelerator.is_local_main_process,
+    ):
+        accelerator.wait_for_everyone()
+        with open(f"{class_images_dir}/captions.txt", "a") as f1, open(
+            f"{class_images_dir}/images.txt", "a"
+        ) as f2:
+            images = pipeline(
+                example["prompt"],
+                num_inference_steps=25,
+                guidance_scale=6.0,
+                negative_prompt=[args.caption_target]*len(example["prompt"]) if args.concept_type in ["nudity", "inappropriate_content"] else None,
+                eta=1.0,
+            ).images
+
+            for i, image in enumerate(images):
+                hash_image = hashlib.sha1(image.tobytes()).hexdigest()
+                image_filename = (
+                    class_images_dir
+                    / f"images/{example['index'][i]}-{hash_image}.jpg"
+                )
+                image.save(image_filename)
+                f2.write(str(image_filename) + "\n")
+            f1.write("\n".join(example["prompt"]) + "\n")
+            accelerator.wait_for_everyone()
+
+
+def _handle_memorization_filtering(args, concept, class_images_dir):
+    """Handle memorization filtering if needed."""
+    filter(
+        class_images_dir,
+        args.mem_impath,
+        outpath=str(class_images_dir / "filtered"),
+    )
+    with open(class_images_dir / "caption_target.txt", "r") as f:
+        concept["caption_target"] = f.readlines()[0].strip()
+    return class_images_dir / "filtered"
+
+
+def _update_concept_paths(concept, class_images_dir):
+    """Update concept dictionary with generated image paths."""
+    concept["class_prompt"] = os.path.join(class_images_dir, "captions.txt")
+    concept["class_data_dir"] = os.path.join(class_images_dir, "images.txt")
+    concept["instance_prompt"] = os.path.join(class_images_dir, "captions.txt")
+    concept["instance_data_dir"] = os.path.join(class_images_dir, "images.txt")
+    
 def getanchorprompts(
     pipeline,
     accelerator,

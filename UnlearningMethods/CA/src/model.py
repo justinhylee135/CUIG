@@ -1,23 +1,28 @@
+# Standard Library Imports
 from typing import Callable, Optional
+import os
 
+# Third Party Imports
 import torch
 from accelerate.logging import get_logger
-from diffusers.models import AutoencoderKL, UNet2DConditionModel
 from packaging import version
+
 import diffusers
-print(version.parse(diffusers.__version__))
-if version.parse(diffusers.__version__) < version.parse("0.20.0"):
-    from diffusers.models.cross_attention import CrossAttention
-else:
-    from diffusers.models.attention import Attention as CrossAttention
+from diffusers.models import AutoencoderKL, UNet2DConditionModel
+from diffusers.models.attention import Attention as CrossAttention
 from diffusers import StableDiffusionPipeline
 from diffusers.pipelines.stable_diffusion.safety_checker import (
     StableDiffusionSafetyChecker,
 )
 from diffusers.schedulers.scheduling_utils import SchedulerMixin
 from diffusers.utils.import_utils import is_xformers_available
-from transformers import CLIPFeatureExtractor, CLIPTextModel, CLIPTokenizer, CLIPVisionModelWithProjection
-
+from transformers import (
+    CLIPFeatureExtractor,
+    CLIPTextModel,
+    CLIPTokenizer,
+    CLIPVisionModelWithProjection,
+    PretrainedConfig,
+)
 
 if is_xformers_available():
     import xformers
@@ -27,6 +32,108 @@ else:
 
 logger = get_logger(__name__)
 
+############################################### Moved from train_ca.py
+def create_custom_diffusion(unet, parameter_group):
+    for name, params in unet.named_parameters():
+        if parameter_group == "cross-attn":
+            if "attn2.to_k" in name or "attn2.to_v" in name:
+                params.requires_grad = True
+            else:
+                params.requires_grad = False
+        elif parameter_group == "attn":
+            if "to_q" in name or "to_k" in name or "to_v" in name or "to_out" in name:
+                print(name)
+                params.requires_grad = True
+            else:
+                params.requires_grad = False
+        elif parameter_group == "full-weight":
+            params.requires_grad = True
+        elif parameter_group == "embedding":
+            params.requires_grad = False
+        else:
+            raise ValueError(
+                "parameter_group argument only cross-attn, full-weight, embedding"
+            )
+
+    # change attn class
+    def change_attn(unet):
+        for layer in unet.children():
+            if type(layer) == CrossAttention:
+                bound_method = set_use_memory_efficient_attention_xformers.__get__(
+                    layer, layer.__class__
+                )
+                setattr(
+                    layer, "set_use_memory_efficient_attention_xformers", bound_method
+                )
+            else:
+                change_attn(layer)
+
+    change_attn(unet)
+    unet.set_attn_processor(CustomDiffusionAttnProcessor())
+    return unet
+
+
+def save_model_card(
+    repo_id: str, images=None, base_model=str, prompt=str, repo_folder=None
+):
+    img_str = ""
+    for i, image in enumerate(images):
+        image.save(os.path.join(repo_folder, f"image_{i}.png"))
+        img_str += f"./image_{i}.png\n"
+
+    yaml = f"""
+        ---
+        license: creativeml-openrail-m
+        base_model: {base_model}
+        instance_prompt: {prompt}
+        tags:
+        - stable-diffusion
+        - stable-diffusion-diffusers
+        - text-to-image
+        - diffusers
+        - custom diffusion
+        inference: true
+        ---
+            """
+    model_card = f"""
+        # Custom Diffusion - {repo_id}
+
+        These are Custom Diffusion adaption weights for {base_model}. The weights were trained on {prompt} using [Custom Diffusion](https://www.cs.cmu.edu/~custom-diffusion). You can find some example images in the following. \n
+        {img_str[0]}
+        """
+    with open(os.path.join(repo_folder, "README.md"), "w") as f:
+        f.write(yaml + model_card)
+
+
+def import_model_class_from_model_name_or_path(
+    pretrained_model_name_or_path: str, revision: str
+):
+    text_encoder_config = PretrainedConfig.from_pretrained(
+        pretrained_model_name_or_path,
+        subfolder="text_encoder",
+        revision=revision,
+    )
+    model_class = text_encoder_config.architectures[0]
+
+    if model_class == "CLIPTextModel":
+        from transformers import CLIPTextModel
+
+        return CLIPTextModel
+    elif model_class == "RobertaSeriesModelWithTransformation":
+        pass
+        # from diffusers.pipelines.alt_diffusion.modeling_roberta_series import (
+        #     RobertaSeriesModelWithTransformation,
+        # )
+
+        # return RobertaSeriesModelWithTransformation
+    else:
+        raise ValueError(f"{model_class} is not supported.")
+
+
+def freeze_params(params):
+    for param in params:
+        param.requires_grad = False
+###############################################
 
 def set_use_memory_efficient_attention_xformers(
     self, use_memory_efficient_attention_xformers: bool, attention_op: Optional[Callable] = None
