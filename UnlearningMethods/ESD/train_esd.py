@@ -113,11 +113,11 @@ if __name__ == '__main__':
     original_params = {}
 
     # Choose parameters to train based on train_method
-    updatable_params, parameters = get_trainable_params(esd_pipeline, args.train_method)
-    print(f"Train Method '{args.train_method}': '{len(updatable_params)}' Updatable Parameters")
+    train_param_names, train_param_values = get_trainable_params(esd_pipeline, args.train_method)
+    print(f"Train Method '{args.train_method}': '{len(train_param_names)}' Updatable Parameters")
     i = 1
     for name, param in esd_pipeline.unet.named_parameters():
-        if name in updatable_params:
+        if name in train_param_names:
             if args.verbose: print(f"{i}. {name}")
             param.requires_grad = True
             i+=1
@@ -134,7 +134,7 @@ if __name__ == '__main__':
     else:
         lr = float(lr)
         print(f"\nUsing provided LR of '{lr}' for '{args.concept_type}' unlearning")
-    opt = torch.optim.Adam(parameters, lr=lr)
+    opt = torch.optim.Adam(train_param_values, lr=lr)
     criteria = torch.nn.MSELoss()
     esd_pipeline.scheduler.set_timesteps(args.ddim_steps)
     frz_pipeline.scheduler.set_timesteps(args.ddim_steps)
@@ -286,6 +286,10 @@ if __name__ == '__main__':
     for prompt, count in prompt_count.items():
         print(f"Word: '{prompt}' Sample Count: {count}")
     
-    # Save unet
-    torch.save(esd_pipeline.unet.state_dict(), save_path)
+    # Save UNet updated parameters
+    save_state_dict = {}
+    for name, param in esd_pipeline.unet.named_parameters():
+        if name in train_param_names:
+            save_state_dict[name] = param.cpu().detach().clone()
+    torch.save(save_state_dict, save_path)
     print(f"Saved ESD UNet to '{save_path}'")

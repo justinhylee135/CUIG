@@ -60,6 +60,7 @@ def setup_accelerator_and_logging(args):
         level=logging.INFO,
     )
     
+    print(f"\nSetting up logger...")
     logger = get_logger(__name__)
     logger.info(accelerator.state, main_process_only=False)
     
@@ -73,7 +74,6 @@ def setup_accelerator_and_logging(args):
     
     # Initialize trackers on main process
     if accelerator.is_main_process:
-        print(vars(args))
         accelerator.init_trackers("concept-ablation", config=vars(args))
     
     return accelerator, logger
@@ -139,6 +139,7 @@ def setup_training_configuration(args, unet, text_encoder, accelerator, logger, 
 
     # Enable xformers if requested
     if args.enable_xformers_memory_efficient_attention:
+        print(f"Enabling xFormers memory efficient attention...")
         if is_xformers_available():
             import xformers
             xformers_version = version.parse(xformers.__version__)
@@ -154,16 +155,19 @@ def setup_training_configuration(args, unet, text_encoder, accelerator, logger, 
 
     # Enable gradient checkpointing if requested
     if args.gradient_checkpointing:
+        print(f"Enabling gradient checkpointing...")
         unet.enable_gradient_checkpointing()
         if args.parameter_group == "embedding":
             text_encoder.gradient_checkpointing_enable()
             
     # Enable TF32 for faster training on Ampere GPUs
     if args.allow_tf32:
+        print(f"Enabling TF32 for faster training on Ampere GPUs...")
         torch.backends.cuda.matmul.allow_tf32 = True
 
     # Scale learning rate
     if args.scale_lr:
+        old_lr = args.learning_rate
         args.learning_rate = (
             args.learning_rate
             * args.gradient_accumulation_steps
@@ -172,6 +176,7 @@ def setup_training_configuration(args, unet, text_encoder, accelerator, logger, 
         )
         if args.with_prior_preservation:
             args.learning_rate = args.learning_rate * 2.0
+        print(f"Scaled learning rate from '{old_lr}' to '{args.learning_rate}'")
 
 def setup_optimizer_and_params(args, unet, text_encoder, tokenizer):
     """
@@ -188,6 +193,7 @@ def setup_optimizer_and_params(args, unet, text_encoder, tokenizer):
     """
     # Use 8-bit Adam for lower memory usage or to fine-tune the model in 16GB GPUs
     if args.use_8bit_adam:
+        print(f"Using 8-bit Adam optimizer...")
         try:
             import bitsandbytes as bnb
         except ImportError:
@@ -201,6 +207,7 @@ def setup_optimizer_and_params(args, unet, text_encoder, tokenizer):
     # Handle modifier tokens for embedding fine-tuning
     modifier_token_id = []
     if args.parameter_group == "embedding":
+        print(f"Setting up text embedding finetuning...")
         assert (
             args.concept_type != "memorization"
         ), "embedding finetuning is not supported for memorization"
@@ -226,6 +233,7 @@ def setup_optimizer_and_params(args, unet, text_encoder, tokenizer):
         )
     else:
         # Set up parameters based on parameter group
+        print(f"Setting up UNet parameter group: '{args.parameter_group}'")
         if args.parameter_group == "cross-attn":
             params_to_optimize = itertools.chain(
                 [
@@ -246,6 +254,7 @@ def setup_optimizer_and_params(args, unet, text_encoder, tokenizer):
             params_to_optimize = itertools.chain(unet.parameters())
 
     # Create optimizer
+    print(f"Creating optimizer with class '{optimizer_class.__name__}'")
     optimizer = optimizer_class(
         params_to_optimize,
         lr=args.learning_rate,
@@ -274,6 +283,7 @@ def prepare_training_state(args, accelerator, logger, unet, text_encoder, optimi
         tuple: (prepared_components, global_step, first_epoch, progress_bar, resume_step)
     """
     # Prepare everything with accelerator
+    print(f"Moving components to accelerator...")
     if args.parameter_group == "embedding":
         text_encoder, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
             text_encoder, optimizer, train_dataloader, lr_scheduler
@@ -317,6 +327,7 @@ def prepare_training_state(args, accelerator, logger, unet, text_encoder, optimi
     resume_step = 0
 
     if args.resume_from_checkpoint:
+        print(f"Resuming from checkpoint: '{args.resume_from_checkpoint}'")
         if args.resume_from_checkpoint != "latest":
             path = os.path.basename(args.resume_from_checkpoint)
         else:

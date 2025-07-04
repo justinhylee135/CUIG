@@ -76,8 +76,20 @@ def main(args):
         args, accelerator, logger, unet, text_encoder, optimizer, train_dataloader, lr_scheduler
     )
 
+    # Retention Loss
+    if args.with_prior_preservation: 
+        print(f"Using retention loss with weight '{args.prior_loss_weight}'")
+    else:
+        print("Not using retention loss, only unlearning loss will be computed.")
+
+    # Target and Anchor Concept
+    target, anchor = args.caption_target.split("+")
+    if anchor == "*":
+        print(f"Mapping target concept '{target}' to full anchor prompts in '{args.class_prompt}'.")
+    else:
+        print(f"Mapping target concept '{target}' to anchor '{anchor}' via replacement using prompts '{args.class_prompt}'.")
+
     # Start Training
-    print(f"\nStarting training with retention loss: '{args.with_prior_preservation}'")
     for epoch in range(first_epoch, args.num_train_epochs):
         (text_encoder if args.parameter_group == "embedding" else unet).train()
         for step, batch in enumerate(train_dataloader):

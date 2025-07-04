@@ -88,31 +88,31 @@ def get_pipelines(model_path, unet_ckpt, use_base_for_frz_unet, devices):
     return frz_pipeline, esd_pipeline
 
 def get_trainable_params(pipeline, train_method):
-    updatable_params = []
-    parameters = []
+    train_param_names = []
+    train_param_values = []
     for name, param in pipeline.unet.named_parameters():
         # Only cross-attention
         if train_method == 'xattn':
             if 'attn2' in name:
-                updatable_params.append(name)
-                parameters.append(param)
+                train_param_names.append(name)
+                train_param_values.append(param)
         # Everything but cross-attention
         elif train_method == 'noxattn':
             if name.startswith('out.') or 'attn2' in name or 'time_embed' in name:
                 continue
-            updatable_params.append(name)
-            parameters.append(param)
+            train_param_names.append(name)
+            train_param_values.append(param)
         # Only self-attention
         elif train_method == 'selfattn':
             if 'attn1' in name:
-                updatable_params.append(name)
-                parameters.append(param)
+                train_param_names.append(name)
+                train_param_values.append(param)
         # All parameters
         elif train_method == 'full':
-            updatable_params.append(name)
-            parameters.append(param)
+            train_param_names.append(name)
+            train_param_values.append(param)
                 
-    return updatable_params, parameters
+    return train_param_names, train_param_values
 
 @torch.no_grad()
 def sample_model(pipeline, prompt, negative_prompt="", height=512, width=512, 

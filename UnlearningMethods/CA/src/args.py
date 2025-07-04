@@ -142,12 +142,6 @@ def parse_args(input_args=None):
         help="the number of generated images used for ablating the concept",
     )
     parser.add_argument(
-        "--output_dir",
-        type=str,
-        default="custom-diffusion-model",
-        help="The output directory where the model predictions and checkpoints will be written.",
-    )
-    parser.add_argument(
         "--num_class_images",
         type=int,
         default=200,
@@ -155,6 +149,12 @@ def parse_args(input_args=None):
             "Minimal anchor class images. If there are not enough images already present in"
             " class_data_dir, additional images will be sampled with class_prompt."
         ),
+    )
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        default="custom-diffusion-model",
+        help="The output directory where the model predictions and checkpoints will be written.",
     )
     parser.add_argument(
         "--num_class_prompts",

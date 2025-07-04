@@ -23,6 +23,7 @@ from transformers import (
     CLIPTextModel,
     CLIPTokenizer,
     CLIPVisionModelWithProjection,
+    CLIPTextConfig,
     PretrainedConfig,
     AutoTokenizer,
 )
@@ -111,7 +112,8 @@ def save_model_card(
 def import_model_class_from_model_name_or_path(
     pretrained_model_name_or_path: str, revision: str
 ):
-    text_encoder_config = PretrainedConfig.from_pretrained(
+    # Alternatively use PretrainedConfig to support other model types
+    text_encoder_config = CLIPTextConfig.from_pretrained(
         pretrained_model_name_or_path,
         subfolder="text_encoder",
         revision=revision,
@@ -119,16 +121,7 @@ def import_model_class_from_model_name_or_path(
     model_class = text_encoder_config.architectures[0]
 
     if model_class == "CLIPTextModel":
-        from transformers import CLIPTextModel
-
         return CLIPTextModel
-    elif model_class == "RobertaSeriesModelWithTransformation":
-        pass
-        # from diffusers.pipelines.alt_diffusion.modeling_roberta_series import (
-        #     RobertaSeriesModelWithTransformation,
-        # )
-
-        # return RobertaSeriesModelWithTransformation
     else:
         raise ValueError(f"{model_class} is not supported.")
 
@@ -149,12 +142,13 @@ def setup_models_and_tokenizer(args, accelerator):
     Returns:
         tuple: (tokenizer, text_encoder, vae, unet, noise_scheduler, weight_dtype)
     """
-    # Load the tokenizer
+    print(f"Loading tokenizer...")
     if args.tokenizer_name:
         tokenizer = AutoTokenizer.from_pretrained(
             args.tokenizer_name,
             revision=args.revision,
             use_fast=False,
+            clean_up_tokenization_spaces=True
         )
     elif args.base_model_dir:
         tokenizer = AutoTokenizer.from_pretrained(
@@ -162,32 +156,38 @@ def setup_models_and_tokenizer(args, accelerator):
             subfolder="tokenizer",
             revision=args.revision,
             use_fast=False,
+            clean_up_tokenization_spaces=True
         )
     else:
         raise ValueError("Either tokenizer_name or base_model_dir must be provided")
 
-    # Import correct text encoder class
+    print(f"Loading text encoder...")
     text_encoder_cls = import_model_class_from_model_name_or_path(
         args.base_model_dir, args.revision
-    )
-
-    # Load scheduler and models
-    noise_scheduler = DDPMScheduler.from_pretrained(
-        args.base_model_dir, subfolder="scheduler"
     )
     text_encoder = text_encoder_cls.from_pretrained(
         args.base_model_dir,
         subfolder="text_encoder",
         revision=args.revision,
     )
-    vae = AutoencoderKL.from_pretrained(
-        args.base_model_dir, subfolder="vae", revision=args.revision
+
+    print(f"Loading noise scheduler...")
+    noise_scheduler = DDPMScheduler.from_pretrained(
+        args.base_model_dir, subfolder="scheduler"
     )
+
+    print(f"Loading VAE...")
+    vae = AutoencoderKL.from_pretrained(
+        args.base_model_dir, subfolder="vae", revision=args.revision, allow_pickle=True
+    )
+
+    print(f"Loading UNet...")
     unet = UNet2DConditionModel.from_pretrained(
         args.base_model_dir, subfolder="unet", revision=args.revision
     )
 
     # Set gradient requirements
+    print(f"Setting parameter gradient tracking...")
     vae.requires_grad_(False)
     if args.parameter_group != "embedding":
         text_encoder.requires_grad_(False)
@@ -199,6 +199,7 @@ def setup_models_and_tokenizer(args, accelerator):
         weight_dtype = torch.float16
     elif accelerator.mixed_precision == "bf16":
         weight_dtype = torch.bfloat16
+    print(f"Using weight dtype: '{weight_dtype}'")
 
     return tokenizer, text_encoder, vae, unet, noise_scheduler, weight_dtype
 

@@ -202,7 +202,11 @@ class CustomDiffusionDataset(Dataset):
             )
         elif self.concept_type == "object":
             anchor, target = instance_target.split("+")
-            instance_prompt = instance_prompt.replace(anchor, target)
+            if anchor == "*":
+                instance_prompt = target
+            else:
+                # Replace anchor with target in prompt
+                instance_prompt = re.sub(re.escape(anchor), target, instance_prompt, flags=re.IGNORECASE)
         elif self.concept_type == "memorization":
             instance_prompt = instance_target.split("+")[1]
         return instance_prompt
@@ -801,6 +805,8 @@ def setup_data_and_scheduler(args, tokenizer, accelerator, optimizer):
         tuple: (train_dataloader, lr_scheduler) and modifies args with calculated steps
     """
     # Create dataset and dataloader
+    num_class_images = min(args.train_size, args.num_class_images)
+    print(f"Creating training dataset with '{num_class_images}' images...")
     train_dataset = CustomDiffusionDataset(
         concepts_list=args.concepts_list,
         concept_type=args.concept_type,
@@ -808,10 +814,12 @@ def setup_data_and_scheduler(args, tokenizer, accelerator, optimizer):
         with_prior_preservation=args.with_prior_preservation,
         size=args.resolution,
         center_crop=args.center_crop,
-        num_class_images=args.num_class_images,
+        num_class_images=num_class_images,
         hflip=args.hflip,
         aug=not args.noaug,
     )
+
+    print(f"Creating training dataloader with '{len(train_dataset)}' examples and batchsize '{args.train_batch_size}'...")
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=args.train_batch_size,
@@ -828,8 +836,10 @@ def setup_data_and_scheduler(args, tokenizer, accelerator, optimizer):
     if args.max_train_steps is None:
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
         overrode_max_train_steps = True
+    print(f"Number of training steps: '{args.max_train_steps}'")
 
     # Create learning rate scheduler
+    print(f"Using lr scheduler: '{args.lr_scheduler}'")
     lr_scheduler = get_scheduler(
         args.lr_scheduler,
         optimizer=optimizer,
