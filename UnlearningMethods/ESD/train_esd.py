@@ -1,7 +1,6 @@
 # Standard Library
 import argparse
 import random
-import json
 from pathlib import Path
 import os
 import sys
@@ -9,12 +8,12 @@ import sys
 # Third Party
 import torch
 from tqdm import tqdm
+from pytorch_lightning import seed_everything
 
 # Local
 ## Utils
 from utils import (
     process_input_concepts,
-    load_pipeline,
     get_pipelines,
     get_trainable_params,
     sample_model,
@@ -43,7 +42,7 @@ if __name__ == '__main__':
     # Erasing
     parser.add_argument('--concept', type=str, help="The concept(s) you want to erase", required=True)
     parser.add_argument('--concept_type', type=str, required=True, choices=['style', 'object', 'celebrity'], help='Type of concept to unlearn')
-    parser.add_argument('--negative_guidance', help='Negative guidance value', type=float, required=False, default=1)
+    parser.add_argument('--negative_guidance', help='Negative guidance value', type=float, required=False, default=1.0)
     
     # Inference
     parser.add_argument('--start_guidance', help='Guidance of initial image', type=float, required=False, default=3)
@@ -55,11 +54,15 @@ if __name__ == '__main__':
     parser.add_argument('--iterations', help='Number of iterations used to train', type=int, required=False, default=1000)
     parser.add_argument('--lr', help='Learning rate', type=str, required=False, default=None)
     parser.add_argument('--devices', help='CUDA devices used for loading frozen and esd unet', type=str, required=False, default='0,0')
+    parser.add_argument('--seed', help='Random seed for reproducibility', type=int, required=False, default=42)
+    parser.add_argument('--sample_latent_from_frz_pipeline', help='Sample latent from frozen pipeline instead of esd pipeline.', action='store_true', default=False)
     
     # Input/Output
     parser.add_argument('--base_model_dir', help='Directory to diffusers pipeline', type=str, required=False, default='CompVis/stable-diffusion-v1-4')
     parser.add_argument('--save_path', help='output directory to save results', type=str, required=True)
     parser.add_argument('--unet_ckpt', help='Path to UNet checkpoint to load for continual unlearning', type=str, required=False, default=None)
+    parser.add_argument('--use_base_for_frz_unet', help='Use base model (instead of unet_ckpt) for frozen UNet', action='store_true', default=False)
+    parser.add_argument('--overwrite_existing_ckpt', help='Overwrite existing checkpoint if it exists', action='store_true', default=False)
     parser.add_argument('--verbose', help='Print verbose output', action='store_true', default=False)
     
     # Continual Enhancements
@@ -81,33 +84,39 @@ if __name__ == '__main__':
     
     args = parser.parse_args()
     
+    # Set seed for reproducibility
+    seed_everything(args.seed)
+    
     # Define save path
     save_path = args.save_path
     parent_dir = Path(save_path).parent
     parent_dir.mkdir(parents=True, exist_ok=True)
-    print(f"Will save model to {save_path}")
+    print(f"\nWill save model to '{save_path}'")
     
     # Exit if model exists
     if os.path.exists(save_path):
-        print(f"Model already exists at {save_path}. Delete existing model to train again.")
-        sys.exit(0)
-        
+        if args.overwrite_existing_ckpt:
+            print(f"Overwriting existing model at {save_path}.")
+        else:
+            print(f"Model already exists at '{save_path}'. Delete existing model to train again.")
+            sys.exit(0)
+
     # Process concept(s) to erase
     prompt_list = process_input_concepts(args.concept, args.concept_type)
-    print(f"Prompt list for Unlearning {args.concept_type}:")
-    for i, prompt in enumerate(prompt_list): print(f"{i+1}. {prompt}")
+    print(f"Prompt list for Unlearning '{args.concept_type}':")
+    for i, prompt in enumerate(prompt_list): print(f"{i+1}. '{prompt}'")
     prompt_count = {prompt: 0 for prompt in prompt_list}
      
     # Load pipelines
     args.devices = [f'cuda:{int(d.strip())}' for d in args.devices.split(',')]
-    frz_pipeline, pipeline = get_pipelines(args.base_model_dir, args.unet_ckpt, args.devices)
+    frz_pipeline, esd_pipeline = get_pipelines(args.base_model_dir, args.unet_ckpt, args.use_base_for_frz_unet, args.devices)
     original_params = {}
 
     # Choose parameters to train based on train_method
-    updatable_params, parameters = get_trainable_params(pipeline, args.train_method)
-    print(f"Train Method '{args.train_method}': {len(updatable_params)} Updatable Parameters")
+    updatable_params, parameters = get_trainable_params(esd_pipeline, args.train_method)
+    print(f"Train Method '{args.train_method}': '{len(updatable_params)}' Updatable Parameters")
     i = 1
-    for name, param in pipeline.unet.named_parameters():
+    for name, param in esd_pipeline.unet.named_parameters():
         if name in updatable_params:
             if args.verbose: print(f"{i}. {name}")
             param.requires_grad = True
@@ -121,15 +130,15 @@ if __name__ == '__main__':
         # LR used in our paper
         if args.concept_type in ['style', 'celebrity']: lr = 1e-5
         if args.concept_type in ['object']: lr = 8e-6
-        print(f"\nUsing default LR of {lr} for {args.concept_type} unlearning")
+        print(f"\nUsing default LR of '{lr}' for '{args.concept_type}' unlearning")
     else:
         lr = float(lr)
-        print(f"\nUsing provided LR of {lr} for {args.concept_type} unlearning")
+        print(f"\nUsing provided LR of '{lr}' for '{args.concept_type}' unlearning")
     opt = torch.optim.Adam(parameters, lr=lr)
     criteria = torch.nn.MSELoss()
-    pipeline.scheduler.set_timesteps(args.ddim_steps)
+    esd_pipeline.scheduler.set_timesteps(args.ddim_steps)
     frz_pipeline.scheduler.set_timesteps(args.ddim_steps)
-    print(f"Using negative_guidance: {args.negative_guidance}")
+    print(f"Using negative_guidance: '{args.negative_guidance}' and start_guidance: '{args.start_guidance}'")
     
     # Simultaneous Unlearning (Early Stopping)
     if args.eval_every is not None:
@@ -151,7 +160,7 @@ if __name__ == '__main__':
         
         # Generate or load SelFT masks (would need to adapt for diffusers UNet)
         selft_mask_dict = get_selft_mask_dict(
-            pipeline, 
+            esd_pipeline, 
             args.selft_mask_dict_path, 
             args.selft_grad_dict_path, 
             prompt_list, 
@@ -162,11 +171,11 @@ if __name__ == '__main__':
         )
         
         # Apply SelFT masks via gradient hooks
-        grad_hooks = apply_selft_masks(pipeline.unet, selft_mask_dict)
-        print(f"Applied SelFT masks with {len(grad_hooks)} hooks")
+        grad_hooks = apply_selft_masks(esd_pipeline.unet, selft_mask_dict)
+        print(f"Applied SelFT masks with '{len(grad_hooks)}' hooks")
     
     # Start Training
-    pipeline.unet.train()
+    esd_pipeline.unet.train()
     stop_training = False
     iteration = 0
     with tqdm(total=args.iterations, desc="Training", unit="iteration") as pbar:
@@ -181,23 +190,23 @@ if __name__ == '__main__':
             # Choose random timestep for sampling
             t_enc = torch.randint(args.ddim_steps, (1,), device=args.devices[0])
             timestep_idx = int(t_enc)
-            timestep = pipeline.scheduler.timesteps[timestep_idx]
+            timestep = esd_pipeline.scheduler.timesteps[timestep_idx]
 
             # Generate random noise
             latents = torch.randn((1, 4, args.image_size // 8, args.image_size // 8)).to(args.devices[0])
-            latents = latents * pipeline.scheduler.init_noise_sigma
+            latents = latents * esd_pipeline.scheduler.init_noise_sigma
 
             with torch.no_grad():
                 # Partially generate latent with the concept to unlearn
                 z = sample_model(
-                    pipeline, 
+                    (frz_pipeline if args.sample_latent_from_frz_pipeline else esd_pipeline), 
                     prompt=prompt, 
                     height=args.image_size, 
                     width=args.image_size,
                     num_inference_steps=args.ddim_steps, 
                     guidance_scale=args.start_guidance, 
                     latents=latents,
-                    t_start=timestep_idx
+                    t_until=timestep_idx
                 )
                 
                 # Get text embeddings
@@ -213,12 +222,12 @@ if __name__ == '__main__':
                 pnoise_frz_prompt = frz_pipeline.unet(z_input, timestep_tensor, encoder_hidden_states=emb_prompt).sample
 
             # Prepare input for ESD model
-            emb_prompt_esd = encode_text(pipeline.text_encoder, pipeline.tokenizer, prompt, args.devices[0])
+            emb_prompt_esd = encode_text(esd_pipeline.text_encoder, esd_pipeline.tokenizer, prompt, args.devices[0])
             z_input_esd = z.to(args.devices[0])
             timestep_tensor_esd = timestep.unsqueeze(0).to(args.devices[0])
             
             # Get noise predictions from ESD model
-            pnoise_prompt_esd = pipeline.unet(z_input_esd, timestep_tensor_esd, encoder_hidden_states=emb_prompt_esd).sample
+            pnoise_prompt_esd = esd_pipeline.unet(z_input_esd, timestep_tensor_esd, encoder_hidden_states=emb_prompt_esd).sample
             
             # No gradients for frozen model
             pnoise_frz_null.requires_grad = False
@@ -232,10 +241,10 @@ if __name__ == '__main__':
             l1sp_loss = None
             l2sp_loss = None
             if args.l1sp_weight > 0.0:
-                l1sp_loss = args.l1sp_weight * calculate_l1sp_loss(pipeline.unet, original_params)
+                l1sp_loss = args.l1sp_weight * calculate_l1sp_loss(esd_pipeline.unet, original_params)
                 loss += l1sp_loss
             if args.l2sp_weight > 0.0:
-                l2sp_loss = args.l2sp_weight * calculate_l2sp_loss(pipeline.unet, original_params)
+                l2sp_loss = args.l2sp_weight * calculate_l2sp_loss(esd_pipeline.unet, original_params)
                 loss += l2sp_loss
 
             # Take Gradient and Optimizer Step
@@ -252,9 +261,9 @@ if __name__ == '__main__':
             iteration+=1
             if args.eval_every is not None and iteration % args.eval_every == 0:
                 # Get estimated unlearned accuracy
-                ua = sample_and_evaluate_ua(pipeline, args.concept_type, iteration, save_path, prompt_list, 
+                ua = sample_and_evaluate_ua(esd_pipeline, args.concept_type, iteration, save_path, prompt_list, 
                                             prompt, args.devices[0], args.classifier_dir)
-                print(f"Iteration {iteration}, Unlearned Accuracy: {ua}")
+                print(f"Iteration '{iteration}', Unlearned Accuracy: '{ua}'")
                 
                 # Check for early stopping
                 best_ua, no_improvement_count, stop_training = check_early_stopping(
@@ -269,14 +278,14 @@ if __name__ == '__main__':
     if grad_hooks:
         for hook in grad_hooks:
             hook.remove()
-        print(f"Removed {len(grad_hooks)} gradient hooks")
+        print(f"Removed '{len(grad_hooks)}' gradient hooks")
     
     # Finalize training
-    pipeline.unet.eval()
+    esd_pipeline.unet.eval()
     print(f"Training complete. Printing prompt sample counts below")
     for prompt, count in prompt_count.items():
         print(f"Word: '{prompt}' Sample Count: {count}")
     
     # Save unet
-    torch.save(pipeline.unet.state_dict(), save_path)
-    print(f"Saved Unlearned UNet to {save_path}")
+    torch.save(esd_pipeline.unet.state_dict(), save_path)
+    print(f"Saved ESD UNet to '{save_path}'")

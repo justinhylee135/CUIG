@@ -30,8 +30,10 @@ def sample_and_evaluate_ua(pipeline, concept_type, iteration, model_save_path, p
     # Set up sampler and folders
     output_dir = os.path.join(Path(model_save_path).parent, f"logs/log_{iteration}")
     os.makedirs(output_dir, exist_ok=True)
-    img_dir = os.path.join(output_dir, "images")  
+    img_dir = os.path.join(output_dir, "images")
+    metrics_dir = os.path.join(output_dir, "metrics")  
     os.makedirs(img_dir, exist_ok=True)
+    os.makedirs(metrics_dir, exist_ok=True)
     print(f"Saving images to: {img_dir}")
 
     # Define concepts and seeds to generate
@@ -110,7 +112,7 @@ def sample_and_evaluate_ua(pipeline, concept_type, iteration, model_save_path, p
     TASKS_LIST = ["style", "object"]
     for TASK in TASKS_LIST:
         # Set output path for results json file
-        output_path = os.path.join(output_dir, f"{TASK}_results.json")
+        output_path = os.path.join(metrics_dir, f"{TASK}_results.json")
 
         # Set pretrained classifier
         model = timm.create_model("vit_large_patch16_224.augreg_in21k", pretrained=True).to(device)
@@ -304,7 +306,7 @@ def sample_and_evaluate_ua(pipeline, concept_type, iteration, model_save_path, p
         summary[f"unlearn_{concept}"] = round(accuracy, 2)
 
     # Save summary to JSON file
-    with open(os.path.join(output_dir, "summary.json"), 'w') as f:
+    with open(os.path.join(metrics_dir, "summary.json"), 'w') as f:
         json.dump(summary, f, indent=4)
     print(f"Unlearn accuracy (average): {unlearn_accuracy_avg:.2f}%")
 

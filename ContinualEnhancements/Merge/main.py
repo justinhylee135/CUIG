@@ -113,7 +113,7 @@ def main():
     print(f"Loaded {len(ckpt_state_dicts)} checkpoints to device '{args.device}'")
     
     # Perform merging
-    print(f"Performing '{args.merge_method}' merging with keyfilter: {args.key_filter}")
+    print(f"Performing '{args.merge_method}' merging with keyfilter: '{args.key_filter}'")
     if args.merge_method == "uniform":
         merged_state_dict = uniform_merge(
             base_state_dict, 

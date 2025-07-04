@@ -22,8 +22,17 @@ python train_esd.py \
 --save_path $OUTPUT_ROOT/esd/models/independent/base/style/Abstractionism.pth \
 --base_model_dir $BASE_MODEL_DIR 
 ```
-
 #### Object
+```bash
+python -m debugpy --listen 10.6.8.8:5678 --wait-for-client \
+train_esd.py \
+--concept 'Bears' \
+--concept_type 'object' \
+--train_method 'noxattn' \
+--save_path $OUTPUT_ROOT/esd/models/independent/base/object/Bears.pth \
+--base_model_dir $BASE_MODEL_DIR \
+--overwrite_existing_ckpt
+```
 #### Celebrity
 
 ### Continual

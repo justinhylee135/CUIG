@@ -3,6 +3,7 @@ import argparse
 import os
 import ast
 from PIL import Image
+import sys
 
 # Third Party
 import torch
@@ -62,22 +63,30 @@ if __name__ == '__main__':
 
     # Load model
     pipe = StableDiffusionPipeline.from_pretrained(args.pipeline_dir, torch_dtype=torch.float16, use_safetensors=True).to("cuda")
+    
+    # Load UNet ckpt
     if ".safetensors" in args.unet_ckpt_path:
         unet_state_dict = load_file(args.unet_ckpt_path, device="cuda")
     else:
         unet_state_dict = torch.load(args.unet_ckpt_path, map_location="cuda")
+        
+    # Clean keys
     keys_list = list(unet_state_dict.keys())
     for key in keys_list:
         if key.startswith("unet."):
             unet_state_dict[key.replace("unet.", "")] = unet_state_dict.pop(key)
+    
+    # Extract state dictionary if in accelerator format
     if "unet" in unet_state_dict:
         unet_state_dict = unet_state_dict["unet"]
+        
+    # Print success
     missing, unexpected = pipe.unet.load_state_dict(unet_state_dict, strict=False)
     print(f"Loaded UNet from {args.unet_ckpt_path}")
     print(f"Loaded keys: {len(unet_state_dict)}")
     print(f"Missing keys: {len(missing)}")
     print(f"Unexpected keys: {len(unexpected)}")
-
+        
     # Disable NSFW checker (sometimes incorrectly flags images)
     def dummy(images, **kwargs):
             return images, [False]

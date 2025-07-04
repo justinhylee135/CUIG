@@ -15,7 +15,7 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..
 sys.path.append(project_root)
 
 ## Utils
-# from utils.sd_utils import esd_sd_call
+from alt_utils import esd_sd_call
 StableDiffusionPipeline.__call__ = esd_sd_call
 
 ## Continual Enhancements
@@ -91,14 +91,14 @@ if __name__ == '__main__':
                     description = 'Finetuning stable-diffusion to erase the concepts')
     
     # Erasing
-    parser.add_argument('--erase_concept', help='concept to erase', type=str, required=True)
+    parser.add_argument('--concept', help='concept to erase', type=str, required=True)
     parser.add_argument('--concept_type', help='type of concept erasure', type=str, required=True, choices=['style', 'object', 'celebrity'])
     parser.add_argument('--erase_from', help='target concept to erase from', type=str, required=False, default = None)
-    parser.add_argument('--negative_guidance', help='Negative guidance value', type=float, required=False, default=1)
+    parser.add_argument('--negative_guidance', help='Negative guidance value', type=float, required=False, default=2)
 
     # Inference
     parser.add_argument('--num_inference_steps', help='number of inference steps for diffusion model', type=int, required=False, default=50)
-    parser.add_argument('--guidance_scale', help='guidance scale to run inference for diffusion model', type=float, required=False, default=3)
+    parser.add_argument('--guidance_scale', help='guidance scale to run inference for diffusion model', type=float, required=False, default=3.0)
     
     # Training
     parser.add_argument('--train_method', help='Parameter Update Group', type=str, required=True, choices=['esd-x', 'esd-u', 'esd-all', 'esd-x-strict'])
@@ -108,7 +108,7 @@ if __name__ == '__main__':
     parser.add_argument('--base_model_dir', help='Base model to use', type=str, default='CompVis/stable-diffusion-v1-4')
     parser.add_argument('--continual_unet_ckpt_path', help='Path to continual unet checkpoint', type=str, default=None)
     parser.add_argument('--device', help='cuda device to train on', type=str, required=False, default='cuda:0')
-    parser.add_argument('--torch_dtype', help='torch dtype to use', type=str, required=False, default='float32', choices=['float32', 'bfloat16', 'float16'])
+    parser.add_argument('--torch_dtype', help='torch dtype to use', type=str, required=False, default='bfloat16', choices=['float32', 'bfloat16', 'float16'])
     
     # Continual Enhancements
     parser.add_argument('--l1sp_weight', type=float, default=0.0, help='Weight for L1SP regularizer')
@@ -117,7 +117,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     # Erasing
-    erase_concept = args.erase_concept
+    erase_concept = args.concept
     concept_type = args.concept_type
     erase_concept_from = args.erase_from
     negative_guidance = args.negative_guidance
@@ -171,10 +171,10 @@ if __name__ == '__main__':
     if lr is None:
         if concept_type in ['style', 'celebrity']: lr = 1e-5
         if concept_type in ['object']: lr = 5e-6
-        print(f"\nUsing default LR of {lr} for {concept_type} unlearning")
+        print(f"\nUsing default LR of '{lr}' for '{concept_type}' unlearning")
     else:
-        print(f"\nUsing provided LR of {lr} for {concept_type} unlearning")       
-    print(f"Using negative guidance of {negative_guidance}")
+        print(f"\nUsing provided LR of '{lr}' for '{concept_type}' unlearning")
+    print(f"Using negative guidance of '{negative_guidance}'")
 
     # Setup training
     esd_param_names, esd_params = get_esd_trainable_parameters(esd_unet, train_method=train_method)

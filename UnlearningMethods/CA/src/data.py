@@ -4,18 +4,21 @@ import random
 import shutil
 from pathlib import Path
 import hashlib
+import math
+from PIL import Image
 
 # Third Party Imports
 import numpy as np
 import openai
 import regex as re
 import torch
-from PIL import Image
+from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import Dataset
 from torchvision import transforms
 from tqdm.auto import tqdm
-import transformers
 from diffusers import DPMSolverMultistepScheduler, DiffusionPipeline
+import transformers
+from transformers import get_scheduler
 
 normalize = transforms.Normalize(
     mean=[0.485, 0.456, 0.406],
@@ -783,3 +786,59 @@ def safe_dir(dir):
     if not dir.exists():
         os.makedirs(str(dir), exist_ok=True)
     return dir
+
+def setup_data_and_scheduler(args, tokenizer, accelerator, optimizer):
+    """
+    Set up dataset, dataloader, and learning rate scheduler.
+    
+    Args:
+        args: Arguments object
+        tokenizer: Tokenizer
+        accelerator: Accelerator object
+        optimizer: Optimizer
+        
+    Returns:
+        tuple: (train_dataloader, lr_scheduler) and modifies args with calculated steps
+    """
+    # Create dataset and dataloader
+    train_dataset = CustomDiffusionDataset(
+        concepts_list=args.concepts_list,
+        concept_type=args.concept_type,
+        tokenizer=tokenizer,
+        with_prior_preservation=args.with_prior_preservation,
+        size=args.resolution,
+        center_crop=args.center_crop,
+        num_class_images=args.num_class_images,
+        hflip=args.hflip,
+        aug=not args.noaug,
+    )
+    train_dataloader = torch.utils.data.DataLoader(
+        train_dataset,
+        batch_size=args.train_batch_size,
+        shuffle=True,
+        collate_fn=lambda examples: collate_fn(examples, args.with_prior_preservation),
+        num_workers=args.dataloader_num_workers,
+    )
+
+    # Calculate training steps
+    overrode_max_train_steps = False
+    num_update_steps_per_epoch = math.ceil(
+        len(train_dataloader) / args.gradient_accumulation_steps
+    )
+    if args.max_train_steps is None:
+        args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
+        overrode_max_train_steps = True
+
+    # Create learning rate scheduler
+    lr_scheduler = get_scheduler(
+        args.lr_scheduler,
+        optimizer=optimizer,
+        num_warmup_steps=args.lr_warmup_steps * args.gradient_accumulation_steps,
+        num_training_steps=args.max_train_steps * args.gradient_accumulation_steps,
+    )
+
+    # Store for later use
+    args._overrode_max_train_steps = overrode_max_train_steps
+    args._train_dataset = train_dataset
+
+    return train_dataloader, lr_scheduler

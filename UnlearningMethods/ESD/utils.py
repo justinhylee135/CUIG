@@ -44,33 +44,48 @@ def load_pipeline(base_model_dir, device="cuda", dtype=torch.float32):
     )
     
     # Set scheduler to DDIM
-    pipeline.scheduler = DDIMScheduler.from_config(pipeline.scheduler.config)
+    pipeline.scheduler = DDIMScheduler(
+        beta_start=0.00085,
+        beta_end=0.012,
+        beta_schedule="linear",
+        num_train_timesteps=1000,
+        clip_sample=False,      
+        set_alpha_to_one=False
+    )
     pipeline = pipeline.to(device)
     
     return pipeline
 
-def get_pipelines(model_path, unet_ckpt, devices):
+def get_pipelines(model_path, unet_ckpt, use_base_for_frz_unet, devices):
     """Get original and trainable pipelines"""
     # Load frozen and esd pipeline
-    print(f"Loading pipeline from {model_path}")
+    print(f"Loading pipeline from '{model_path}'")
     frz_pipeline = load_pipeline(model_path, devices[1])
-    pipeline = load_pipeline(model_path, devices[0])
+    esd_pipeline = load_pipeline(model_path, devices[0])
     
     # Load UNet checkpoint if provided
     if unet_ckpt is not None:
         if not os.path.exists(unet_ckpt):
             print(f"UNet checkpoint not found at '{unet_ckpt}'. Using default UNet from pipeline '{model_path}'...")
         else:
+            # Load UNet ckpt state dictionary (for continual unlearning)
             print(f"Loading UNet checkpoint from '{unet_ckpt}'...")
             unet_state_dict = torch.load(unet_ckpt, map_location=devices[0])
-            frz_pipeline.unet.load_state_dict(unet_state_dict)
-            pipeline.unet.load_state_dict(unet_state_dict)
-            print(f"UNet checkpoint loaded successfully from '{unet_ckpt}'")
-    
+
+            # Load to ESD UNet
+            esd_pipeline.unet.load_state_dict(unet_state_dict)
+            print(f"UNet checkpoint '{unet_ckpt}' loaded to ESD pipeline")
+
+            if use_base_for_frz_unet:
+                print(f"Using base model UNet '{model_path}' for frozen pipeline")
+            else:
+                frz_pipeline.unet.load_state_dict(unet_state_dict)
+                print(f"UNet checkpoint '{unet_ckpt}' loaded to frozen pipeline")
+
     frz_pipeline.unet.eval()
     frz_pipeline.unet.requires_grad_(False)
     
-    return frz_pipeline, pipeline
+    return frz_pipeline, esd_pipeline
 
 def get_trainable_params(pipeline, train_method):
     updatable_params = []
@@ -102,15 +117,15 @@ def get_trainable_params(pipeline, train_method):
 @torch.no_grad()
 def sample_model(pipeline, prompt, negative_prompt="", height=512, width=512, 
                 num_inference_steps=50, guidance_scale=7.5, eta=0.0, 
-                latents=None, t_start=None, return_intermediates=False):
+                latents=None, t_until=None, return_intermediates=False):
     """Sample the model using diffusers pipeline"""
     
-    if t_start is not None:
+    if t_until is not None:
         # For partial denoising (till time step t)
-        # Convert t_start to the appropriate timestep for the scheduler
+        # Convert t_until to the appropriate timestep for the scheduler
         pipeline.scheduler.set_timesteps(num_inference_steps)
         timesteps = pipeline.scheduler.timesteps
-        start_timestep = timesteps[t_start] if t_start < len(timesteps) else timesteps[0]
+        end_timestep = timesteps[t_until] if t_until < len(timesteps) else timesteps[0]
         
         # Encode text
         text_embeddings = pipeline._encode_prompt(
@@ -122,13 +137,11 @@ def sample_model(pipeline, prompt, negative_prompt="", height=512, width=512,
         if latents is None:
             latents = torch.randn((1, 4, height // 8, width // 8), 
                                 device=pipeline.device, dtype=pipeline.unet.dtype)
-        
-        # Scale the initial noise by the standard deviation required by the scheduler
-        latents = latents * pipeline.scheduler.init_noise_sigma
-        
+            latents = latents * pipeline.scheduler.init_noise_sigma
+            
         # Partial denoising
         for i, t in enumerate(timesteps):
-            if t < start_timestep:
+            if t < end_timestep:
                 break
                 
             # Expand latents if doing classifier free guidance

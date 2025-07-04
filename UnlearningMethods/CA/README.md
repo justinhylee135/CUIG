@@ -20,14 +20,15 @@ accelerate launch \
     train_ca.py \
     --caption_target "Abstractionism Style" \
     --concept_type style \
-    --output_dir $OUTPUT_ROOT/ca/models/independent/base/style/Abstractionism \
-    --pretrained_model_name_or_path $BASE_MODEL_DIR  \
+    --output_dir $OUTPUT_ROOT/ca/models/independent/base/style/Abstractionism_retention \
+    --base_model_dir $BASE_MODEL_DIR  \
     --max_train_steps 1000 \
     --train_size 200 \
-    --class_data_dir $REPO_ROOT/UnlearningMethods/CA/anchor_datasets/unlearncanvas_painting \
-    --class_prompt $REPO_ROOT/UnlearningMethods/CA/anchor_prompts/painting.txt  \
+    --class_data_dir $REPO_ROOT/UnlearningMethods/CA/anchor_datasets/style/painting_unlearncanvas \
+    --class_prompt $REPO_ROOT/UnlearningMethods/CA/anchor_prompts/style/painting.txt  \
     --scale_lr --hflip --noaug \
-    --enable_xformers_memory_efficient_attention 
+    --enable_xformers_memory_efficient_attention \
+    --with_prior_preservation 
 ```
 
 #### Object

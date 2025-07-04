@@ -7,6 +7,7 @@ import torch
 from accelerate.logging import get_logger
 from packaging import version
 
+## Diffusers Imports
 import diffusers
 from diffusers.models import AutoencoderKL, UNet2DConditionModel
 from diffusers.models.attention import Attention as CrossAttention
@@ -15,6 +16,7 @@ from diffusers.pipelines.stable_diffusion.safety_checker import (
     StableDiffusionSafetyChecker,
 )
 from diffusers.schedulers.scheduling_utils import SchedulerMixin
+from diffusers.schedulers import DDPMScheduler
 from diffusers.utils.import_utils import is_xformers_available
 from transformers import (
     CLIPFeatureExtractor,
@@ -22,6 +24,7 @@ from transformers import (
     CLIPTokenizer,
     CLIPVisionModelWithProjection,
     PretrainedConfig,
+    AutoTokenizer,
 )
 
 if is_xformers_available():
@@ -32,7 +35,7 @@ else:
 
 logger = get_logger(__name__)
 
-############################################### Moved from train_ca.py
+############################################### Directly Moved from train_ca.py
 def create_custom_diffusion(unet, parameter_group):
     for name, params in unet.named_parameters():
         if parameter_group == "cross-attn":
@@ -134,7 +137,74 @@ def freeze_params(params):
     for param in params:
         param.requires_grad = False
 ###############################################
+# Code chunks cut from main and moved here
+def setup_models_and_tokenizer(args, accelerator):
+    """
+    Load and set up tokenizer, text encoder, VAE, UNet, and noise scheduler.
+    
+    Args:
+        args: Arguments object containing model configuration
+        accelerator: Accelerator object for mixed precision info
+        
+    Returns:
+        tuple: (tokenizer, text_encoder, vae, unet, noise_scheduler, weight_dtype)
+    """
+    # Load the tokenizer
+    if args.tokenizer_name:
+        tokenizer = AutoTokenizer.from_pretrained(
+            args.tokenizer_name,
+            revision=args.revision,
+            use_fast=False,
+        )
+    elif args.base_model_dir:
+        tokenizer = AutoTokenizer.from_pretrained(
+            args.base_model_dir,
+            subfolder="tokenizer",
+            revision=args.revision,
+            use_fast=False,
+        )
+    else:
+        raise ValueError("Either tokenizer_name or base_model_dir must be provided")
 
+    # Import correct text encoder class
+    text_encoder_cls = import_model_class_from_model_name_or_path(
+        args.base_model_dir, args.revision
+    )
+
+    # Load scheduler and models
+    noise_scheduler = DDPMScheduler.from_pretrained(
+        args.base_model_dir, subfolder="scheduler"
+    )
+    text_encoder = text_encoder_cls.from_pretrained(
+        args.base_model_dir,
+        subfolder="text_encoder",
+        revision=args.revision,
+    )
+    vae = AutoencoderKL.from_pretrained(
+        args.base_model_dir, subfolder="vae", revision=args.revision
+    )
+    unet = UNet2DConditionModel.from_pretrained(
+        args.base_model_dir, subfolder="unet", revision=args.revision
+    )
+
+    # Set gradient requirements
+    vae.requires_grad_(False)
+    if args.parameter_group != "embedding":
+        text_encoder.requires_grad_(False)
+    unet = create_custom_diffusion(unet, args.parameter_group)
+
+    # Determine weight dtype for mixed precision
+    weight_dtype = torch.float32
+    if accelerator.mixed_precision == "fp16":
+        weight_dtype = torch.float16
+    elif accelerator.mixed_precision == "bf16":
+        weight_dtype = torch.bfloat16
+
+    return tokenizer, text_encoder, vae, unet, noise_scheduler, weight_dtype
+
+
+
+# Original Functions for CA Repo Below
 def set_use_memory_efficient_attention_xformers(
     self, use_memory_efficient_attention_xformers: bool, attention_op: Optional[Callable] = None
 ):
