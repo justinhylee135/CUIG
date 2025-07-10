@@ -22,6 +22,16 @@ python train_esd.py \
 --save_path $OUTPUT_ROOT/esd/models/independent/base/style/Abstractionism.pth \
 --base_model_dir $BASE_MODEL_DIR 
 ```
+```bash
+python train_esd.py \
+--concept 'Abstractionism' \
+--concept_type 'style' \
+--train_method 'xattn' \
+--save_path $OUTPUT_ROOT/esd/models/independent/projection/gradient_projection/style/Abstractionism.pth \
+--base_model_dir $BASE_MODEL_DIR \
+--with_gradient_projection \
+--anchor_prompts_path $REPO_ROOT/UnlearningMethods/CA/anchor_prompts/style/painting.txt
+```
 #### Object
 ```bash
 python -m debugpy --listen 10.6.8.8:5678 --wait-for-client \

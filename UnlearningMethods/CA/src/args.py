@@ -7,7 +7,45 @@ def parse_args(input_args=None):
     Argument parser for concept unlearning training script (train_ca.py)
     """
     parser = argparse.ArgumentParser(description="Simple example of a training script.")
+    # Custom Continual Enhancements Arguments
+    ## Simultaneous 
+    parser.add_argument('--eval_every', type=int, default=None, help='Evaluate every n iterations')
+    parser.add_argument('--patience', type=int, default=2000, help='Patience for early stopping')
+    parser.add_argument('--classifier_dir', type=str, required=False, help='Directory of classifier')
+    ## Regularization
+    parser.add_argument('--l2sp_weight', type=float, default=0.0, help='Weight for L2SP regularizer')
+    parser.add_argument('--l1sp_weight', type=float, default=0.0, help='Weight for L1SP regularizer')
+    ## SelFT 
+    parser.add_argument('--selft_loss', type=str, default=None, choices=['esd', 'ca'], help='Type of importance loss to use')
+    parser.add_argument('--selft_topk', type=float, default=0.01, help='Top-k percentage of of parameters by importance.')
+    parser.add_argument('--selft_anchor', type=str, default="", help='Anchor concept for ca loss')
+    parser.add_argument('--selft_grad_dict_path', type=str, default=None, help='Path to save/load gradient dictionary')
+    parser.add_argument('--selft_mask_dict_path', type=str, default=None, help='Path to save/load mask dictionary')
+    ## Gradient Projection
+    parser.add_argument(
+        '--with_gradient_projection',
+        action='store_true',
+        help='Whether to apply gradient projection to preserve anchor concepts.'
+    )
+    
     # Custom Training Arguments
+    parser.add_argument(
+        '--with_negative_prompt',
+        help='Use negative prompt for generating anchor dataset',
+        action='store_true',
+        default=False
+    )
+    parser.add_argument(
+        '--previously_unlearned',
+        help='List of previously unlearned concepts for negative prompting',
+        default=None
+    )
+    parser.add_argument(
+        '--overwrite_existing_ckpt', 
+        help='Overwrite existing checkpoint if it exists', 
+        action='store_true', 
+        default=False
+    )
     parser.add_argument(
         "--unet_ckpt",
         type=str,
@@ -376,7 +414,7 @@ def parse_args(input_args=None):
     parser.add_argument(
         "--prior_generation_precision",
         type=str,
-        default=None,
+        default="fp16",
         choices=["no", "fp32", "fp16", "bf16"],
         help=(
             "Choose prior generation precision between fp32, fp16 and bf16 (bfloat16). Bf16 requires PyTorch >="

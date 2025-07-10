@@ -17,9 +17,9 @@ python sample.py \
 #### CA
 ```bash
 python sample.py \
---unet_ckpt_path $OUTPUT_ROOT/ca/models/independent/base/style/Abstractionism_retention/delta.bin \
---output_dir $OUTPUT_ROOT/ca/eval_results/independent/base/style/Abstractionism_retention/images \
---styles_subset '["Abstractionism", "Blossom_Season","Rust","Crayon","Fauvism","Superstring","Red_Blue_Ink", "Gorgeous_Love", "French", "Joy", "Greenfield", "Expressionism", "Impressionism"]' \
+--unet_ckpt_path $OUTPUT_ROOT/ca/models/continual/projection/style/gradient_projection/thruCartoon/delta.bin \
+--output_dir $OUTPUT_ROOT/ca/eval_results/continual/projection/style/gradient_projection/thruCartoon/images \
+--styles_subset '["Abstractionism", "Byzantine", "Cartoon", "Blossom_Season","Rust","Crayon","Fauvism","Superstring","Red_Blue_Ink", "Gorgeous_Love", "French", "Joy", "Greenfield", "Expressionism", "Impressionism"]' \
 --objects_subset '["Architectures", "Butterfly", "Flame", "Flowers", "Horses", "Human", "Sea", "Trees"]' \
 --pipeline_dir $BASE_MODEL_DIR 
 ```
@@ -38,10 +38,10 @@ python evaluate.py \
 #### CA
 ```bash
 python evaluate.py \
---input_dir $OUTPUT_ROOT/ca/eval_results/independent/base/style/Abstractionism_retention/images \
---output_dir $OUTPUT_ROOT/ca/eval_results/independent/base/style/Abstractionism_retention/metrics \
+--input_dir $OUTPUT_ROOT/ca/eval_results/continual/projection/style/gradient_projection/thruCartoon/images \
+--output_dir $OUTPUT_ROOT/ca/eval_results/continual/projection/style/gradient_projection/thruCartoon/metrics \
 --classifier_dir $REPO_ROOT/Evaluation/UnlearnCanvas/classifiers \
---unlearn '["Abstractionism"]' \
+--unlearn '["Abstractionism", "Byzantine", "Cartoon"]' \
 --retain '["Blossom_Season","Rust","Crayon","Fauvism","Superstring","Red_Blue_Ink", "Gorgeous_Love", "French", "Joy", "Greenfield", "Expressionism", "Impressionism"]' \
 --cross_retain '["Architectures", "Butterfly", "Flame", "Flowers", "Horses", "Human", "Sea", "Trees"]'
 ```
@@ -67,12 +67,22 @@ python evaluate.py \
 ```
 
 #### Merge
+##### Style
 ```bash
 python sample.py \
 --unet_ckpt_path /fs/scratch/PAS2099/lee.10369/CUIG/esd/models/independent/merge/ties/style/lambda1.70_topk0.80/thruVibrantFlow.pth \
 --output_dir /fs/scratch/PAS2099/lee.10369/CUIG/esd/eval_results/independent/merge/ties/style/lambda1.70_topk0.80/thruVibrantFlow/images \
 --styles_subset '["Abstractionism", "Byzantine", "Cartoon", "Cold_Warm", "Ukiyoe", "Van_Gogh", "Neon_Lines", "Picasso", "On_Fire", "Magic_Cube", "Winter", "Vibrant_Flow", "Blossom_Season","Rust","Crayon","Fauvism","Superstring","Red_Blue_Ink", "Gorgeous_Love", "French", "Joy", "Greenfield", "Expressionism", "Impressionism"]' \
 --objects_subset '["Architectures", "Butterfly", "Flame", "Flowers", "Horses", "Human", "Sea", "Trees"]' \
+--pipeline_dir $BASE_MODEL_DIR 
+```
+##### Object
+```bash
+python sample.py \
+--unet_ckpt_path /fs/scratch/PAS2099/lee.10369/CUIG/ca/models/independent/merge/ties/object/lambda1.25_topk0.80/thruDogs.pth \
+--output_dir /fs/scratch/PAS2099/lee.10369/CUIG/ca/eval_results/independent/merge/ties/object/lambda1.25_topk0.80/thruDogs/images \
+--styles_subset '["Blossom_Season","Rust","Crayon","Fauvism","Superstring","Red_Blue_Ink", "Gorgeous_Love", "French", "Joy", "Greenfield", "Expressionism", "Impressionism"]' \
+--objects_subset '["Bears", "Birds", "Cats", "Dogs", "Architectures", "Butterfly", "Flame", "Flowers", "Horses", "Human", "Sea", "Trees"]' \
 --pipeline_dir $BASE_MODEL_DIR 
 ```
 

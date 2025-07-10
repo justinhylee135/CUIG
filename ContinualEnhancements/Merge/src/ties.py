@@ -3,25 +3,27 @@ from typing import List, Dict, Union, Optional
 from tqdm import tqdm
 import os
 
+from src.utils import key_match
+
 def ties_merge(
     base_state_dict: Dict[str, torch.Tensor],
     ckpt_state_dicts: List[Dict[str, torch.Tensor]],
-    key_filter: Optional[str] = None,
+    key_filter: Optional[Union[str, List[str]]] = None,
     lambda_val: Union[float, List[float]] = 1.0,
     top_k: Union[float, List[float]] = 0.3,
     merge_func: str = "mean"
 ) -> Dict[str, torch.Tensor]:
     """
     Perform TIES merging on model checkpoints.
-    
+
     Args:
         base_state_dict: Base model state dictionary
         ckpt_state_dicts: List of checkpoint state dictionaries to merge
-        key_filter: Only merge parameters whose keys contain this string
+        key_filter: Only merge parameters whose keys contain this string or any string in the list
         lambda_val: Scaling factor(s) for task vectors
         top_k: Top-K fraction(s) for sparsification
         merge_func: Merging function ("mean", "sum", or "max")
-    
+
     Returns:
         Merged state dictionary
     """
@@ -36,7 +38,7 @@ def ties_merge(
         if len(lambda_val) != num_ckpts:
             raise ValueError("Length of lambda list must match number of checkpoints")
         lambda_vals = lambda_val
-    
+
     # Handle top-K values
     if not isinstance(top_k, list):
         top_k_vals = [top_k] * num_ckpts
@@ -44,56 +46,63 @@ def ties_merge(
         if len(top_k) != num_ckpts:
             raise ValueError("Length of top_k list must match number of checkpoints")
         top_k_vals = top_k
-    
+
     for i, val in enumerate(lambda_vals):
         print(f"Checkpoint {i+1}: lambda={val:.3f}, top_k={top_k_vals[i]:.3f}")
-    
+
     # Initialize merged state dictionary
     merged_state = base_state_dict.copy()
     merged_count = 0
     total_count = 0
     progress_bar = tqdm(base_state_dict.items(), desc="TIES Merging")
-    
+
     # Iterate through base parameters
     for key, base_param in progress_bar:
         total_count += 1
-        
-        if key_filter is None or key_filter in key:
-            merged_count += 1
+
+        if key_match(key, key_filter):
             base_vector = base_param.view(-1)
             task_vectors = []
-            
+
             # Compute task vectors (differences from base)
+            key_not_found = 0
             for i, state_dict in enumerate(ckpt_state_dicts):
                 if key not in state_dict:
-                    raise ValueError(f"Key {key} not found in checkpoint {i}")
-                
+                    print(f"Warning: Key {key} not found in checkpoint {i}, skipping")
+                    key_not_found += 1
+                    continue
+
                 # Task Vector
                 param = state_dict[key].to(base_param.device)
                 diff = (param - base_param).view(-1)
 
-                
                 # Scale by lambda
                 diff = lambda_vals[i] * diff
                 task_vectors.append(diff)
-            
+
+            if key_not_found == len(ckpt_state_dicts):
+                print(f"All checkpoints missing key '{key}', skipping this parameter")
+                continue
+            else:
+                merged_count += 1
+
             # Stack task vectors for TIES processing
             task_matrix = torch.stack(task_vectors, dim=0)
-            
+
             # Apply TIES merging
             ties_vector = apply_ties(
-                task_matrix, 
-                top_k_vals, 
-                merge_func, 
+                task_matrix,
+                top_k_vals,
+                merge_func,
                 verbose=False
             )
-            
+
             # Add to base parameter
             final_vector = base_vector + ties_vector
             merged_state[key] = final_vector.view_as(base_param)
-    
+
     print(f"Merged {merged_count}/{total_count} parameters with filter '{key_filter}' and '{merge_func}' merge function")
-    
+
     return merged_state
 
 def apply_ties(

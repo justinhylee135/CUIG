@@ -32,7 +32,11 @@ from ContinualEnhancements.SelFT.selft_utils import (
     get_selft_mask_dict,
     apply_selft_masks
 )
-    
+### Projection
+from ContinualEnhancements.Projection.gradient_projection import (
+    get_anchor_embeddings,
+    apply_gradient_projection
+)    
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
@@ -45,7 +49,7 @@ if __name__ == '__main__':
     parser.add_argument('--negative_guidance', help='Negative guidance value', type=float, required=False, default=1.0)
     
     # Inference
-    parser.add_argument('--start_guidance', help='Guidance of initial image', type=float, required=False, default=3)
+    parser.add_argument('--start_guidance', help='Guidance of initial image', type=float, required=False, default=3.0)
     parser.add_argument('--ddim_steps', help='DDIM steps of inference', type=int, required=False, default=50)
     parser.add_argument('--image_size', help='Image resolution', type=int, required=False, default=512)
     
@@ -77,10 +81,14 @@ if __name__ == '__main__':
     
     ## SelFT
     parser.add_argument('--selft_loss', type=str, default=None, choices=['esd', 'ca'], help='Type of importance loss to use')
-    parser.add_argument('--selft_topk', type=float, default=0.001, help='Top-k percentage of of parameters by importance.')
+    parser.add_argument('--selft_topk', type=float, default=0.01, help='Top-k percentage of of parameters by importance.')
     parser.add_argument('--selft_anchor', type=str, default="", help='Anchor concept for ca loss')
     parser.add_argument('--selft_grad_dict_path', type=str, default=None, help='Path to save/load gradient dictionary')
     parser.add_argument('--selft_mask_dict_path', type=str, default=None, help='Path to save/load mask dictionary')
+    
+    ## Projection
+    parser.add_argument('--with_gradient_projection', action='store_true', default=False, help='Use gradient projection wrt anchor embeddings')
+    parser.add_argument('--anchor_prompts_path', type=str, default=None, help='Path to anchor prompts txt for gradient projection')
     
     args = parser.parse_args()
     
@@ -98,7 +106,7 @@ if __name__ == '__main__':
         if args.overwrite_existing_ckpt:
             print(f"Overwriting existing model at {save_path}.")
         else:
-            print(f"Model already exists at '{save_path}'. Delete existing model to train again.")
+            print(f"Model already exists at '{save_path}'. Set flag '--overwrite_existing_ckpt' to overwrite it.")
             sys.exit(0)
 
     # Process concept(s) to erase
@@ -129,7 +137,7 @@ if __name__ == '__main__':
     if lr is None:
         # LR used in our paper
         if args.concept_type in ['style', 'celebrity']: lr = 1e-5
-        if args.concept_type in ['object']: lr = 8e-6
+        if args.concept_type in ['object']: lr = 5e-6
         print(f"\nUsing default LR of '{lr}' for '{args.concept_type}' unlearning")
     else:
         lr = float(lr)
@@ -143,7 +151,7 @@ if __name__ == '__main__':
     # Simultaneous Unlearning (Early Stopping)
     if args.eval_every is not None:
         if args.classifier_dir is None: raise ValueError("Classifier directory must be specified for early stopping evaluation.")
-        print(f"Using early stopping with patience {args.patience} and eval_every {args.eval_every} instead of {args.iterations} iterations")
+        print(f"Using early stopping with patience '{args.patience}' and eval_every '{args.eval_every}' instead of '{args.iterations}' iterations")
         best_ua = 0.0
         no_improvement_count = 0
     
@@ -159,8 +167,11 @@ if __name__ == '__main__':
         print(f"Using SelFT with loss type: '{args.selft_loss}', top-k: '{args.selft_topk}'")
         
         # Generate or load SelFT masks (would need to adapt for diffusers UNet)
+        esd_pipeline.unet.eval()
         selft_mask_dict = get_selft_mask_dict(
-            esd_pipeline, 
+            esd_pipeline.unet,
+            esd_pipeline.text_encoder,
+            esd_pipeline.tokenizer, 
             args.selft_mask_dict_path, 
             args.selft_grad_dict_path, 
             prompt_list, 
@@ -174,6 +185,22 @@ if __name__ == '__main__':
         grad_hooks = apply_selft_masks(esd_pipeline.unet, selft_mask_dict)
         print(f"Applied SelFT masks with '{len(grad_hooks)}' hooks")
     
+    # Projection
+    if args.with_gradient_projection:
+        print(f"Using gradient projection to preserve anchor concepts.")
+        anchor_prompts = []
+        if os.path.isfile(args.anchor_prompts_path):
+            with open(args.anchor_prompts_path, 'r') as f:
+                prompts = [line.strip() for line in f.readlines() if line.strip()]
+            print(f"\tLoaded '{len(prompts)}' anchor prompts from '{args.anchor_prompts_path}'")
+            anchor_prompts.extend(prompts)
+        else:
+            print(f"\tWarning - anchor prompts file '{args.anchor_prompts_path}' not found")
+        print(f"Total anchor prompts collected: '{len(anchor_prompts)}'")
+        anchor_embeddings_matrix = get_anchor_embeddings(
+            anchor_prompts, esd_pipeline.text_encoder, esd_pipeline.tokenizer, args.devices[0]
+        )
+
     # Start Training
     esd_pipeline.unet.train()
     stop_training = False
@@ -247,22 +274,34 @@ if __name__ == '__main__':
                 l2sp_loss = args.l2sp_weight * calculate_l2sp_loss(esd_pipeline.unet, original_params)
                 loss += l2sp_loss
 
-            # Take Gradient and Optimizer Step
+            # Take Gradient
             loss.backward()
+            
+            # Make gradient orthogonal to text embedding space of anchor concepts
+            if args.with_gradient_projection:
+                apply_gradient_projection(
+                    model=esd_pipeline.unet,
+                    filtered_embedding_matrix=anchor_embeddings_matrix,
+                    device=args.devices[0],
+                )
+            
+            # Optimizer step
             opt.step()
             
             # Log progress (add regularizer losses if they exist)
-            pbar_postfix = {"loss": loss.item(), "timestep": timestep_idx, "prompt": f"'{prompt}'"}
-            if l1sp_loss is not None: pbar_postfix["l1sp_loss"] = l1sp_loss.item()
-            if l2sp_loss is not None: pbar_postfix["l2sp_loss"] = l2sp_loss.item()
+            pbar_postfix = {"loss": loss.item(), "t": timestep_idx, "prompt": f"'{prompt}'"}
+            if l1sp_loss is not None: pbar_postfix["l1_loss"] = l1sp_loss.item()
+            if l2sp_loss is not None: pbar_postfix["l2_loss"] = l2sp_loss.item()
             pbar.set_postfix(pbar_postfix)
             
             # Simultaneous Early Stopping
             iteration+=1
             if args.eval_every is not None and iteration % args.eval_every == 0:
                 # Get estimated unlearned accuracy
+                esd_pipeline.unet.eval()
                 ua = sample_and_evaluate_ua(esd_pipeline, args.concept_type, iteration, save_path, prompt_list, 
                                             prompt, args.devices[0], args.classifier_dir)
+                esd_pipeline.unet.train()
                 print(f"Iteration '{iteration}', Unlearned Accuracy: '{ua}'")
                 
                 # Check for early stopping

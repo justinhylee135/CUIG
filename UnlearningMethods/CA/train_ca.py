@@ -1,5 +1,7 @@
 # Standard Library Imports
 import os
+import sys
+import copy
 
 # Third Party Imports
 import torch
@@ -18,12 +20,15 @@ from src.data import (
     setup_data_and_scheduler
 )
 from src.utils import (
+    check_for_existing_ckpt,
     setup_accelerator_and_logging,
     setup_concepts_list,
     setup_hub_repository,
     setup_training_configuration,
     setup_optimizer_and_params,
     prepare_training_state,
+    setup_continual_enhancement,
+    print_training_settings_summary,
     zero_out_embedding_gradients_except_concept,
     get_params_to_clip,
     update_progress_and_checkpoint,
@@ -33,12 +38,28 @@ from src.utils import (
 )
 from src.args import parse_args
 
+## Continual Enhancements
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+sys.path.append(project_root)
+### Simultaneous
+from ContinualEnhancements.Simultaneous.sim_utils import sample_and_evaluate_ua, check_early_stopping
+### Regularization
+from ContinualEnhancements.Regularization.l1sp import calculate_l1sp_loss
+from ContinualEnhancements.Regularization.l2sp import calculate_l2sp_loss
+### SelFT Imports Used in utils.py
+### Projection
+from ContinualEnhancements.Projection.gradient_projection import (
+    apply_gradient_projection
+)
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 check_min_version("0.14.0")
 
 logger = get_logger(__name__)
  
 def main(args):
+    # Overwrites existing ckpt only if flag is set '--overwrite_existing_ckpt'
+    check_for_existing_ckpt(args)
+
     # Set up Logging and Accelerator
     accelerator, logger = setup_accelerator_and_logging(args)
 
@@ -53,7 +74,6 @@ def main(args):
 
     # Create output directory and huggingface repo (if selected)
     if accelerator.is_main_process:
-        if args.output_dir is not None: os.makedirs(args.output_dir, exist_ok=True)
         repo_id = setup_hub_repository(args)
     
     # Load and configure all models
@@ -71,25 +91,18 @@ def main(args):
     # Set up data and scheduler
     train_dataloader, lr_scheduler = setup_data_and_scheduler(args, tokenizer, accelerator, optimizer)
 
+    setup_continual_enhancement(args, unet, text_encoder, tokenizer, accelerator.device)
+
     # Prepare training state
     prepared_components, global_step, first_epoch, progress_bar, resume_step = prepare_training_state(
-        args, accelerator, logger, unet, text_encoder, optimizer, train_dataloader, lr_scheduler
+        args, accelerator, unet, text_encoder, optimizer, train_dataloader, lr_scheduler
     )
 
-    # Retention Loss
-    if args.with_prior_preservation: 
-        print(f"Using retention loss with weight '{args.prior_loss_weight}'")
-    else:
-        print("Not using retention loss, only unlearning loss will be computed.")
-
-    # Target and Anchor Concept
-    target, anchor = args.caption_target.split("+")
-    if anchor == "*":
-        print(f"Mapping target concept '{target}' to full anchor prompts in '{args.class_prompt}'.")
-    else:
-        print(f"Mapping target concept '{target}' to anchor '{anchor}' via replacement using prompts '{args.class_prompt}'.")
+    # Print training settings summary
+    print_training_settings_summary(args, accelerator, logger, train_dataloader)
 
     # Start Training
+    iteration = 0
     for epoch in range(first_epoch, args.num_train_epochs):
         (text_encoder if args.parameter_group == "embedding" else unet).train()
         for step, batch in enumerate(train_dataloader):
@@ -191,8 +204,28 @@ def main(args):
                     mask = batch["mask"].to(accelerator.device)
                     loss = ((loss * mask).sum([1, 2, 3]) / mask.sum([1, 2, 3])).mean()
 
+                # Regularizers
+                l1sp_loss = None
+                l2sp_loss = None
+                if args.l1sp_weight > 0.0:
+                    l1sp_loss = args.l1sp_weight * calculate_l1sp_loss(unet, args.original_params)
+                    loss += l1sp_loss
+                if args.l2sp_weight > 0.0:
+                    l2sp_loss = args.l2sp_weight * calculate_l2sp_loss(unet, args.original_params)
+                    loss += l2sp_loss
+
+                # Compute gradients
                 accelerator.backward(loss)
                 
+                # Make gradient orthogonal to text embedding space of anchor concepts
+                if args.with_gradient_projection:
+                    apply_gradient_projection(
+                        model=unet,
+                        filtered_embedding_matrix=args.anchor_embeddings_matrix,
+                        device=accelerator.device,
+                        accelerator=accelerator
+                    )
+                    
                 # Zero gradients for all token embeddings except the concept embeddings
                 if args.parameter_group == "embedding":
                     zero_out_embedding_gradients_except_concept(
@@ -216,12 +249,53 @@ def main(args):
             )
 
             # Update logs
-            logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0], "timestep": timesteps[0].item()}
+            logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0], "t": timesteps[0].item()}
+            if args.with_prior_preservation:
+                logs["u_loss"] = unlearning_loss.item()
+                logs["r_loss"] = retention_loss.item()
+            if l1sp_loss is not None: logs["l1_loss"] = l1sp_loss.item()
+            if l2sp_loss is not None: logs["l2_loss"] = l2sp_loss.item()
             progress_bar.set_postfix(**logs)
             accelerator.log(logs, step=global_step)
+            iteration += 1
 
+            # Simultaneous
+            if args.eval_every is not None and iteration % args.eval_every == 0:
+                # Create sampling pipeline (Use fp16 for quicker sampling)
+                eval_unet = copy.deepcopy(accelerator.unwrap_model(unet))
+                eval_text_encoder = copy.deepcopy(accelerator.unwrap_model(text_encoder))
+                if weight_dtype == torch.float32: 
+                    eval_unet.half()
+                    eval_text_encoder.half()
+                pipeline = CustomDiffusionPipeline.from_pretrained(
+                    args.base_model_dir,
+                    unet=eval_unet,
+                    text_encoder=eval_text_encoder,
+                    tokenizer=tokenizer,
+                    revision=args.revision,
+                    modifier_token_id=modifier_token_id,
+                    torch_dtype=torch.float16,
+                ).to(accelerator.device, torch_dtype=torch.float16)
+                pipeline.unet.eval()
+                pipeline.text_encoder.eval()
+                
+                # Sample and evaluate unlearned accuracy
+                save_path = os.path.join(args.output_dir, "delta.bin")
+                ua = sample_and_evaluate_ua(pipeline, args.concept_type, iteration, save_path, args.prompt_list, 
+                                            None, accelerator.device, args.classifier_dir)
+                print(f"Iteration '{iteration}', Unlearned Accuracy: '{ua}'")
+                
+                # Tear down pipeline
+                del pipeline
+                torch.cuda.empty_cache()
+                
+                # Check for early stopping
+                args.best_ua, args.no_improvement_count, args.stop_training = check_early_stopping(
+                    ua, args.best_ua, args.no_improvement_count, args.eval_every, args.patience
+                )
+                
             # Check if we reached the maximum number of training steps
-            if global_step >= args.max_train_steps:
+            if global_step >= args.max_train_steps or (args.eval_every and args.stop_training):
                 break
         
         # Run validation step if enabled by args.turn_on_validation

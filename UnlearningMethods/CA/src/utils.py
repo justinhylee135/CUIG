@@ -5,6 +5,8 @@ import json
 import os
 import math
 import itertools
+import ast
+import sys
 
 # Third Party
 import torch
@@ -23,7 +25,40 @@ from huggingface_hub import create_repo, HfApi
 # Local/project-specific
 from src.model import CustomDiffusionPipeline, freeze_params, save_model_card
 
-# All functions here are code chunks cut from main
+## Continual Enhancements
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+sys.path.append(project_root)
+### SelFT
+from ContinualEnhancements.SelFT.selft_utils import (
+    get_selft_mask_dict,
+    apply_selft_masks
+)
+### Gradient Projection
+from ContinualEnhancements.Projection.gradient_projection import (
+    get_anchor_embeddings
+)
+
+# Most functions here are code chunks cut from main
+def check_for_existing_ckpt(args):
+    """
+    Check if the output directory already contains a checkpoint.
+    
+    Args:
+        args: Arguments object with output directory
+        
+    Raises:
+        FileExistsError: If checkpoint already exists and overwrite_existing_ckpt is False
+    """
+    if args.output_dir is not None: 
+        os.makedirs(args.output_dir, exist_ok=True)
+    save_path = os.path.join(args.output_dir, "delta.bin")
+    if os.path.exists(save_path):
+        if args.overwrite_existing_ckpt:
+            print(f"Checkpoint '{save_path}' already exists. Overwriting it as per the argument '--overwrite_existing_ckpt'.")
+        else:
+            print(f"Model already exists at '{save_path}'. Set flag '--overwrite_existing_ckpt' to overwrite it.")
+            sys.exit(0)
+
 def setup_accelerator_and_logging(args):
     """
     Set up Accelerator and logging configuration.
@@ -79,17 +114,48 @@ def setup_accelerator_and_logging(args):
     return accelerator, logger
 
 def setup_concepts_list(args):
-    if args.concepts_list is None:
-        args.concepts_list = [
-            {
-                "instance_prompt": args.instance_prompt,
-                "class_prompt": args.class_prompt,
-                "instance_data_dir": args.instance_data_dir,
-                "class_data_dir": args.class_data_dir,
-                "caption_target": args.caption_target,
-            }
-        ]
+    # Load in lists of concepts, class prompts, and data directories
+    if "[" in args.caption_target:
+        args.caption_target = ast.literal_eval(args.caption_target)
+        num_concepts = len(args.caption_target)
+        if "[" in args.class_data_dir:
+            args.class_data_dir = ast.literal_eval(args.class_data_dir)
+        else:
+            args.class_data_dir = [args.class_data_dir] * num_concepts
+        if "[" in args.class_prompt:
+            args.class_prompt = ast.literal_eval(args.class_prompt)
+        else:
+            args.class_prompt = [args.class_prompt] * num_concepts
     else:
+        args.caption_target = [args.caption_target]
+        args.class_data_dir = [args.class_data_dir]
+        args.class_prompt = [args.class_prompt]
+    
+    # We'll also build prompt_list for continual enhancements methods
+    args.prompt_list = []
+
+    if args.concepts_list is None:
+        num_concepts = len(args.caption_target)
+        args.concepts_list = []
+        for i in range(num_concepts):
+            # Create concepts_list entry
+            args.concepts_list.append({
+                "class_prompt": args.class_prompt[i],
+                "class_data_dir": args.class_data_dir[i],
+                "caption_target": args.caption_target[i],
+                "instance_prompt": args.instance_prompt[i] if args.instance_prompt else None, # Default empty
+                "instance_data_dir": args.instance_data_dir[i] if args.instance_data_dir else None, # Default empty
+            })
+            
+            # Create prompt_list entry
+            if args.concept_type == "object":
+                args.prompt_list.append(args.caption_target[i].split("+")[1])
+            elif args.concept_type == "style":
+                args.prompt_list.append(args.caption_target[i].replace("_", " ") + " Style")
+            else:
+                raise ValueError(f"Unknown concept type: '{args.concept_type}'. Supported types are 'object' and 'style' for prompt_list.")
+    else:
+        print(f"Loading json concepts list from '{args.concepts_list}'...")
         with open(args.concepts_list, "r") as f:
             args.concepts_list = json.load(f)
 
@@ -265,7 +331,66 @@ def setup_optimizer_and_params(args, unet, text_encoder, tokenizer):
 
     return optimizer, modifier_token_id, params_to_optimize
 
-def prepare_training_state(args, accelerator, logger, unet, text_encoder, optimizer, train_dataloader, lr_scheduler):
+def setup_continual_enhancement(args, unet, text_encoder, tokenizer, device):
+    """
+    Set up continual enhancement components.
+    """
+    # Continual Enhancements
+    ## Retention Loss
+    if args.with_prior_preservation: 
+        print(f"Using retention loss with weight '{args.prior_loss_weight}'")
+    else:
+        print("Not using retention loss, only unlearning loss will be computed.")
+
+    ## Simultaneous Unlearning (Early Stopping)
+    if args.eval_every is not None:
+        if args.classifier_dir is None: raise ValueError("Classifier directory must be specified for early stopping evaluation.")
+        print(f"Using early stopping with patience '{args.patience}' and eval_every '{args.eval_every}' instead of '{args.max_train_steps}' iterations")
+        args.best_ua = 0.0
+        args.no_improvement_count = 0
+        args.stop_training = False
+
+    ## Regularization    
+    args.original_params = {}
+    if args.l1sp_weight > 0.0: print(f"Using L1SP regularizer with weight '{args.l1sp_weight}'")
+    if args.l2sp_weight > 0.0: print(f"Using L2SP regularizer with weight '{args.l2sp_weight}'")
+    ## SelFT
+    selft_device = "cuda:0" if torch.cuda.is_available() else "cpu"
+    selft_mask_dict = None
+    grad_hooks = []
+    if args.selft_loss is not None:
+        print(f"Using SelFT with loss type: '{args.selft_loss}', top-k: '{args.selft_topk}'")
+        # Generate or load SelFT masks (would need to adapt for diffusers UNet)
+        unet.eval()
+        selft_mask_dict = get_selft_mask_dict(
+            unet, text_encoder, tokenizer,
+            args.selft_mask_dict_path, args.selft_grad_dict_path, 
+            args.prompt_list, args.selft_anchor, 
+            args.selft_topk, args.selft_loss, selft_device
+        )
+        # Apply SelFT masks via gradient hooks
+        grad_hooks = apply_selft_masks(unet, selft_mask_dict)
+        print(f"Applied SelFT masks with '{len(grad_hooks)}' hooks")
+    ## Gradient Projection
+    if args.with_gradient_projection:
+        print(f"Using gradient projection to preserve anchor concepts.")
+        args.anchor_prompts = []
+        for i, concept in enumerate(args.concepts_list):
+            class_prompt_file = concept["class_prompt"]
+            if os.path.isfile(class_prompt_file):
+                with open(class_prompt_file, 'r') as f:
+                    prompts = [line.strip() for line in f.readlines() if line.strip()]
+                print(f"\tConcept {i+1}: Loaded '{len(prompts)}' anchor prompts from '{class_prompt_file}'")
+                args.anchor_prompts.extend(prompts)
+            else:
+                print(f"\tConcept {i+1}: Warning - class_prompt file '{class_prompt_file}' not found")
+        print(f"Total anchor prompts collected: '{len(args.anchor_prompts)}'")
+        args.anchor_embeddings_matrix = get_anchor_embeddings(
+            args.anchor_prompts, text_encoder, tokenizer, device
+        )
+        
+
+def prepare_training_state(args, accelerator, unet, text_encoder, optimizer, train_dataloader, lr_scheduler):
     """
     Prepare training state with accelerator and set up logging, checkpoints, etc.
     
@@ -303,29 +428,12 @@ def prepare_training_state(args, accelerator, logger, unet, text_encoder, optimi
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
     args.num_train_epochs = math.ceil(args.max_train_steps / num_update_steps_per_epoch)
 
-    # Training information
-    total_batch_size = (
-        args.train_batch_size
-        * accelerator.num_processes
-        * args.gradient_accumulation_steps
-    )
-
-    logger.info("***** Running training *****")
-    logger.info(f"  Num examples = {len(args._train_dataset)}")
-    logger.info(f"  Num batches each epoch = {len(train_dataloader)}")
-    logger.info(f"  Num Epochs = {args.num_train_epochs}")
-    logger.info(f"  Instantaneous batch size per device = {args.train_batch_size}")
-    logger.info(
-        f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}"
-    )
-    logger.info(f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}")
-    logger.info(f"  Total optimization steps = {args.max_train_steps}")
-
-    # Handle checkpoint resumption
+    # Setup step counters
     global_step = 0
     first_epoch = 0
     resume_step = 0
 
+    # Load previous training state if resuming
     if args.resume_from_checkpoint:
         print(f"Resuming from checkpoint: '{args.resume_from_checkpoint}'")
         if args.resume_from_checkpoint != "latest":
@@ -353,12 +461,6 @@ def prepare_training_state(args, accelerator, logger, unet, text_encoder, optimi
                 num_update_steps_per_epoch * args.gradient_accumulation_steps
             )
 
-    # Load UNet checkpoint for continual unlearning
-    if args.unet_ckpt:
-        print(f"Loading UNet checkpoint from '{args.unet_ckpt}'...")
-        accelerator.load_state(args.unet_ckpt)
-        print(f"Loaded UNet checkpoint from '{args.unet_ckpt}'")
-
     # Set up progress bar
     progress_bar = tqdm(
         range(global_step, args.max_train_steps),
@@ -368,6 +470,40 @@ def prepare_training_state(args, accelerator, logger, unet, text_encoder, optimi
 
     return prepared_components, global_step, first_epoch, progress_bar, resume_step
 
+def print_training_settings_summary(args, accelerator, logger, train_dataloader):
+    """ Print a summary of the training configuration."""
+    # Target and Anchor Concept
+    print(f"Unlearning target to anchor mappings:")
+    if args.concept_type == "object":
+        for i, concept in enumerate(args.concepts_list):
+            anchor, target = concept["caption_target"].split("+")
+            if anchor == "*":
+                print(f"\t{i+1}. Mapping target concept '{target}' to full anchor prompts in '{concept['class_prompt']}'.")
+            else:
+                print(f"\t{i+1}. Mapping target concept '{target}' to anchor '{anchor}' via replacement using prompts '{concept['class_prompt']}'.")
+    elif args.concept_type == "style":
+        for i, concept in enumerate(args.concepts_list):
+            style = f"{concept['caption_target'].replace('_', ' ')} Style"
+            print(f"\t{i+1}. Mapping target concept '{style}' to prompts in '{concept['class_prompt']}'.")
+
+    # Total batch size
+    total_batch_size = (
+        args.train_batch_size
+        * accelerator.num_processes
+        * args.gradient_accumulation_steps
+    )
+
+    # Final message
+    logger.info("***** Running training *****")
+    logger.info(f"  Num examples = {len(args._train_dataset)}")
+    logger.info(f"  Num batches each epoch = {len(train_dataloader)}")
+    logger.info(f"  Num Epochs = {args.num_train_epochs}")
+    logger.info(f"  Instantaneous batch size per device = {args.train_batch_size}")
+    logger.info(
+        f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}"
+    )
+    logger.info(f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}")
+    logger.info(f"  Total optimization steps = {args.max_train_steps}")
 
 def zero_out_embedding_gradients_except_concept(
     args, accelerator, text_encoder, tokenizer, modifier_token_id
@@ -594,13 +730,13 @@ def finalize_training(
         # Run final validation if enabled
         images = None
         if args.turn_on_validation and args.validation_prompt and args.num_validation_images > 0:
-            images = _run_final_validation(
+            images = run_final_validation(
                 args, accelerator, pipeline, final_epoch
             )
 
         # Upload to hub if requested
         if args.push_to_hub and repo_id:
-            _upload_to_hub(args, repo_id, images)
+            upload_to_hub(args, repo_id, images)
 
 
 def run_final_validation(args, accelerator, pipeline, final_epoch):

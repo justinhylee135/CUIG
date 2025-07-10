@@ -9,6 +9,8 @@ cd $REPO_ROOT/ContinualEnhancements/Merge
 ```
 
 ## TIES
+### ESD
+#### Style
 ```bash
 python main.py \
 --base_model_dir $REPO_ROOT/UnlearningMethods/base_models/UnlearnCanvas \
@@ -32,7 +34,42 @@ python main.py \
 --ties_topk 0.80 \
 --ties_merge_func 'mean'
 ```
+#### Object
+```bash
+python main.py \
+--base_model_dir $REPO_ROOT/UnlearningMethods/base_models/UnlearnCanvas \
+--ckpt_paths '["/fs/scratch/PAS2099/lee.10369/CUIG/esd/models/independent/base/object/CompvisToDiffusers/lr_5e6/ddim_linear_ng_4_sg_7.5/Bears.pth",
+                "/fs/scratch/PAS2099/lee.10369/CUIG/esd/models/independent/base/object/CompvisToDiffusers/lr_5e6/ddim_linear_ng_4_sg_7.5/Birds.pth",
+                "/fs/scratch/PAS2099/lee.10369/CUIG/esd/models/independent/base/object/CompvisToDiffusers/lr_5e6/ddim_linear_ng_4_sg_7.5/Cats.pth",
+                "/fs/scratch/PAS2099/lee.10369/CUIG/esd/models/independent/base/object/CompvisToDiffusers/lr_5e6/ddim_linear_ng_4_sg_7.5/Dogs.pth",
+                "/fs/scratch/PAS2099/lee.10369/CUIG/esd/models/independent/base/object/CompvisToDiffusers/lr_5e6/ddim_linear_ng_4_sg_7.5/Fishes.pth",
+                "/fs/scratch/PAS2099/lee.10369/CUIG/esd/models/independent/base/object/CompvisToDiffusers/lr_5e6/ddim_linear_ng_4_sg_7.5/Frogs.pth"]' \
+--save_path "/fs/scratch/PAS2099/lee.10369/CUIG/esd/models/independent/merge/ties/object/lambda1.00_topk0.30/thruFrogs.pth" \
+--merge_method 'ties' \
+--device 'cpu' \
+--ties_lambda 1.00 \
+--ties_topk 0.30 \
+--ties_merge_func 'mean'
+```
 
+### CA
+#### Style
+#### Object
+```bash
+python main.py \
+--base_model_dir $REPO_ROOT/UnlearningMethods/base_models/UnlearnCanvas \
+--ckpt_paths '["/fs/scratch/PAS2099/lee.10369/CUIG/ca/models/independent/base/object/no_retention_bsz_8/Bears/delta.bin",
+                "/fs/scratch/PAS2099/lee.10369/CUIG/ca/models/independent/base/object/no_retention_bsz_8/Birds/delta.bin",
+                "/fs/scratch/PAS2099/lee.10369/CUIG/ca/models/independent/base/object/no_retention_bsz_8/Cats/delta.bin",
+                "/fs/scratch/PAS2099/lee.10369/CUIG/ca/models/independent/base/object/no_retention_bsz_8/Dogs/delta.bin"]' \
+--save_path "/fs/scratch/PAS2099/lee.10369/CUIG/ca/models/independent/merge/ties/object/lambda1.25_topk0.80/thruDogs.pth" \
+--merge_method 'ties' \
+--key_filter '["attn2.to_k", "attn2.to_v"]'
+--device 'cpu' \
+--ties_lambda 1.25 \
+--ties_topk 0.80 \
+--ties_merge_func 'mean'
+```
 
 ---
 

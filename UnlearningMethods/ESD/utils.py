@@ -70,17 +70,21 @@ def get_pipelines(model_path, unet_ckpt, use_base_for_frz_unet, devices):
         else:
             # Load UNet ckpt state dictionary (for continual unlearning)
             print(f"Loading UNet checkpoint from '{unet_ckpt}'...")
-            unet_state_dict = torch.load(unet_ckpt, map_location=devices[0])
+            unet_state_dict = torch.load(unet_ckpt, map_location=devices[0], weights_only=False)
 
             # Load to ESD UNet
-            esd_pipeline.unet.load_state_dict(unet_state_dict)
+            missing, unexpected = esd_pipeline.unet.load_state_dict(unet_state_dict, strict=False)
             print(f"UNet checkpoint '{unet_ckpt}' loaded to ESD pipeline")
+            print(f"\tLoaded '{len(unet_state_dict)}' keys with '{len(missing)}' missing and '{len(unexpected)}' unexpected keys.")
+
 
             if use_base_for_frz_unet:
                 print(f"Using base model UNet '{model_path}' for frozen pipeline")
             else:
-                frz_pipeline.unet.load_state_dict(unet_state_dict)
+                missing, unexpected = frz_pipeline.unet.load_state_dict(unet_state_dict, strict=False)
                 print(f"UNet checkpoint '{unet_ckpt}' loaded to frozen pipeline")
+                print(f"\tLoaded '{len(unet_state_dict)}' keys with '{len(missing)}' missing and '{len(unexpected)}' unexpected keys.")
+
 
     frz_pipeline.unet.eval()
     frz_pipeline.unet.requires_grad_(False)

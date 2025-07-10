@@ -142,8 +142,8 @@ def setup_models_and_tokenizer(args, accelerator):
     Returns:
         tuple: (tokenizer, text_encoder, vae, unet, noise_scheduler, weight_dtype)
     """
-    print(f"Loading tokenizer...")
     if args.tokenizer_name:
+        print(f"Loading tokenizer from '{args.tokenizer_name}'...")
         tokenizer = AutoTokenizer.from_pretrained(
             args.tokenizer_name,
             revision=args.revision,
@@ -151,6 +151,7 @@ def setup_models_and_tokenizer(args, accelerator):
             clean_up_tokenization_spaces=True
         )
     elif args.base_model_dir:
+        print(f"Loading tokenizer from '{args.base_model_dir}'...")
         tokenizer = AutoTokenizer.from_pretrained(
             args.base_model_dir,
             subfolder="tokenizer",
@@ -161,7 +162,7 @@ def setup_models_and_tokenizer(args, accelerator):
     else:
         raise ValueError("Either tokenizer_name or base_model_dir must be provided")
 
-    print(f"Loading text encoder...")
+    print(f"Loading text encoder from '{args.base_model_dir}'...")
     text_encoder_cls = import_model_class_from_model_name_or_path(
         args.base_model_dir, args.revision
     )
@@ -171,20 +172,31 @@ def setup_models_and_tokenizer(args, accelerator):
         revision=args.revision,
     )
 
-    print(f"Loading noise scheduler...")
+    print(f"Loading noise scheduler from '{args.base_model_dir}'...")
     noise_scheduler = DDPMScheduler.from_pretrained(
         args.base_model_dir, subfolder="scheduler"
     )
 
-    print(f"Loading VAE...")
+    print(f"Loading VAE from '{args.base_model_dir}'...")
     vae = AutoencoderKL.from_pretrained(
         args.base_model_dir, subfolder="vae", revision=args.revision, allow_pickle=True
     )
 
-    print(f"Loading UNet...")
+    print(f"Loading UNet from '{args.base_model_dir}'...")
     unet = UNet2DConditionModel.from_pretrained(
         args.base_model_dir, subfolder="unet", revision=args.revision
     )
+
+    # Load UNet checkpoint for continual unlearning
+    if args.unet_ckpt:
+        if not os.path.exists(args.unet_ckpt):
+            print(f"UNet checkpoint not found at '{args.unet_ckpt}'. Using default UNet from pipeline '{args.base_model_dir}'...")
+        else:
+            print(f"Loading UNet checkpoint from '{args.unet_ckpt}'...")
+            ckpt_sd = torch.load(args.unet_ckpt, map_location="cpu", weights_only=False)
+            if "unet" in ckpt_sd: ckpt_sd = ckpt_sd["unet"]
+            missing, unexpected = unet.load_state_dict(ckpt_sd, strict=False)
+            print(f"Loaded '{len(ckpt_sd)}' keys from UNet checkpoint with '{len(missing)}' missing and '{len(unexpected)}' unexpected keys.")
 
     # Set gradient requirements
     print(f"Setting parameter gradient tracking...")

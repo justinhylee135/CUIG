@@ -1,20 +1,16 @@
 # Standard Library
 import argparse
-import json
-import os
 from pathlib import Path
-from typing import List, Dict, Union, Optional
 import ast
 
 # Third Party
 import torch
-from tqdm import tqdm
 from diffusers import StableDiffusionPipeline, UNet2DConditionModel
 
 # Local
-from ties import ties_merge
-from uniform import uniform_merge
-from task_arithmetic import task_arithmetic_merge
+from src.ties import ties_merge
+from src.uniform import uniform_merge
+from src.task_arithmetic import task_arithmetic_merge
 
 def main():
     parser = argparse.ArgumentParser(
@@ -92,6 +88,12 @@ def main():
     # Parse checkpoint list
     checkpoint_paths = ast.literal_eval(args.ckpt_paths)
     
+    # Parse key_filter
+    if "[" in args.key_filter:
+        args.key_filter = ast.literal_eval(args.key_filter)
+    else:
+        args.key_filter = [args.key_filter] if args.key_filter else None
+
     # Create output directory
     output_dir = Path(args.save_path).parent
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -109,6 +111,8 @@ def main():
         if not Path(ckpt_path).exists(): raise FileNotFoundError(f"Checkpoint {ckpt_path} does not exist")
         print(f"{i}. '{ckpt_path}'")
         unet_state_dict = torch.load(ckpt_path, map_location=args.device, weights_only=False)
+        if "unet" in unet_state_dict:
+            unet_state_dict = unet_state_dict["unet"]
         ckpt_state_dicts.append(unet_state_dict)
     print(f"Loaded {len(ckpt_state_dicts)} checkpoints to device '{args.device}'")
     

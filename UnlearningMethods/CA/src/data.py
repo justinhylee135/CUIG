@@ -6,6 +6,7 @@ from pathlib import Path
 import hashlib
 import math
 from PIL import Image
+import ast
 
 # Third Party Imports
 import numpy as np
@@ -38,6 +39,9 @@ def collate_fn(examples, with_prior_preservation):
     input_anchor_ids = [example["instance_anchor_prompt_ids"] for example in examples]
     pixel_values = [example["instance_images"] for example in examples]
     mask = [example["mask"] for example in examples]
+    image_paths = [example["image_path"] for example in examples]
+    target_prompts = [example["target_prompt"] for example in examples]
+    target_anchor_prompts = [example["anchor_prompt"] for example in examples]
     # Concat class and instance examples for prior preservation.
     # We do this to avoid doing two forward passes.
     if with_prior_preservation:
@@ -57,6 +61,9 @@ def collate_fn(examples, with_prior_preservation):
         "input_anchor_ids": input_anchor_ids,
         "pixel_values": pixel_values,
         "mask": mask.unsqueeze(1),
+        "image_paths": image_paths,
+        "target_prompts": target_prompts,
+        "target_anchor_prompts": target_anchor_prompts,
     }
     return batch
 
@@ -183,13 +190,14 @@ class CustomDiffusionDataset(Dataset):
 
     def __getprompt__(self, instance_prompt, instance_target):
         if self.concept_type == "style":
-            r = np.random.choice([0, 1, 2])
+            r = np.random.choice([0, 1])
+            instance_prompt = instance_prompt.replace(".", "")
+            instance_target = instance_target.replace("_", " ")
+            instance_target = instance_target.replace(" Style", "")
             instance_prompt = (
-                f"{instance_prompt}, in the style of {instance_target}"
+                f"{instance_prompt}, in {instance_target} Style"
                 if r == 0
-                else f"in {instance_target}'s style, {instance_prompt}"
-                if r == 1
-                else f"in {instance_target}'s style, {instance_prompt}"
+                else f"In {instance_target} Style, {instance_prompt}"
             )
         elif self.concept_type in ["nudity", "inappropriate_content"]:
             r = np.random.choice([0, 1, 2])
@@ -216,6 +224,7 @@ class CustomDiffusionDataset(Dataset):
         instance_image, instance_prompt, instance_target = self.instance_images_path[
             index % self.num_instance_images
         ]
+        example["image_path"] = instance_image
         instance_image = Image.open(instance_image)
         if not instance_image.mode == "RGB":
             instance_image = instance_image.convert("RGB")
@@ -228,6 +237,9 @@ class CustomDiffusionDataset(Dataset):
 
         instance_anchor_prompt = instance_prompt
         instance_prompt = self.__getprompt__(instance_prompt, instance_target)
+        example["anchor_prompt"] = instance_anchor_prompt
+        example["target_prompt"] = instance_prompt
+
         # apply resize augmentation and create a valid image region mask
         random_scale = self.size
         if self.aug:
@@ -312,7 +324,7 @@ def filter(
     elif Path(folder / "images.txt").exists():
         with open(f"{folder}/images.txt", "r") as f:
             image_paths = f.read().splitlines()
-        with open(f"{folder}/caption.txt", "r") as f:
+        with open(f"{folder}/captions.txt", "r") as f:
             image_captions = f.read().splitlines()
     else:
         image_paths = [
@@ -356,7 +368,7 @@ def filter(
 
     os.makedirs(outpath, exist_ok=True)
     os.makedirs(f"{outpath}/samples", exist_ok=True)
-    with open(f"{outpath}/caption.txt", "w") as f:
+    with open(f"{outpath}/captions.txt", "w") as f:
         for each in filtered_captions:
             f.write(each.strip() + "\n")
 
@@ -391,6 +403,7 @@ def generate_anchor_images_if_needed(args, accelerator, logger):
         None: Modifies args.concepts_list in place
     """
     # Generate class images if prior preservation is enabled.
+    print(f"Processing '{len(args.concepts_list)}' concepts.")
     for i, concept in enumerate(args.concepts_list):
         # directly path to ablation images and its corresponding prompts is provided.
         if (
@@ -398,23 +411,26 @@ def generate_anchor_images_if_needed(args, accelerator, logger):
             and concept["instance_data_dir"] is not None
         ):
             break
-
         class_images_dir = Path(concept["class_data_dir"])
         if not class_images_dir.exists():
             class_images_dir.mkdir(parents=True, exist_ok=True)
         os.makedirs(f"{class_images_dir}/images", exist_ok=True)
-
+        
         # we need to generate training images
+        image_dir = (Path(os.path.join(class_images_dir, "images")))
+        num_existing_class_images = len(list(image_dir.iterdir()))
+        print(f"\t{i}. '{concept['caption_target']}': '{num_existing_class_images}' class images at '{image_dir}'.")
         if (
-            len(list(Path(os.path.join(class_images_dir, "images")).iterdir()))
-            < args.num_class_images
-        ):
+            num_existing_class_images < args.num_class_images
+        ):  
+            num_to_generate = args.num_class_images - num_existing_class_images
+            print(f"Only '{num_existing_class_images}' class images found at '{image_dir}'. Generating '{num_to_generate}' more images...")
             pipeline = _setup_generation_pipeline(args, accelerator)
             class_prompt_collection = _get_class_prompt_collection(
                 args, concept, class_images_dir, pipeline, accelerator
             )
             _generate_images_from_prompts(
-                args, concept, class_prompt_collection, class_images_dir, 
+                args, num_to_generate, concept, class_prompt_collection, class_images_dir, 
                 pipeline, accelerator, logger
             )
             del pipeline
@@ -463,34 +479,24 @@ def _get_class_prompt_collection(args, concept, class_images_dir, pipeline, acce
     """Get collection of prompts for class image generation."""
     # need to create prompts using class_prompt.
     if not os.path.isfile(concept["class_prompt"]):
-        # style based prompts are retrieved from laion dataset
-        if args.concept_type in ["style"]:
-            with open('../assets/finetune_prompts/painting.txt', 'r') as f:
-                class_prompt_collection = [x.strip() for x in f.readlines()]
-        elif args.concept_type in ["nudity", "inappropriate_content"]:
-            with open('../assets/finetune_prompts/people.txt', 'r') as f:
-                class_prompt_collection = [x.strip() for x in f.readlines()]
-        elif concept["class_prompt"] in ["robot", "cat", "fish", "dog"]:
-            with open(f'../assets/finetune_prompts/{concept["class_prompt"]}.txt', 'r') as f:
-                class_prompt_collection = [x.strip() for x in f.readlines()]
         # LLM based prompt collection for ablating new objects or memorization images
-        else:
-            class_prompt = concept["class_prompt"]
-            # in case of object query chatGPT to generate captions containing the anchor category
-            class_prompt_collection, caption_target = getanchorprompts(
-                pipeline,
-                accelerator,
-                class_prompt,
-                args.concept_type,
-                class_images_dir,
-                args.num_class_prompts,
-                mem_impath=args.mem_impath if args.concept_type == "memorization" else None,
-                model_id=args.prompt_gen_model
-            )
-            concept["caption_target"] += f";*+{caption_target}"
-            with open(class_images_dir / "caption_target.txt", "w") as f:
-                f.write(concept["caption_target"])
-            print(class_prompt_collection, concept["caption_target"])
+        print(f"Generating class prompts for concept: '{concept['class_prompt']}'")
+        class_prompt = concept["class_prompt"]
+        # in case of object query chatGPT to generate captions containing the anchor category
+        class_prompt_collection, caption_target = getanchorprompts(
+            pipeline,
+            accelerator,
+            class_prompt,
+            args.concept_type,
+            class_images_dir,
+            args.num_class_prompts,
+            mem_impath=args.mem_impath if args.concept_type == "memorization" else None,
+            model_id=args.prompt_gen_model
+        )
+        concept["caption_target"] += f";*+{caption_target}"
+        with open(class_images_dir / "caption_target.txt", "w") as f:
+            f.write(concept["caption_target"])
+        print(class_prompt_collection, concept["caption_target"])
     # class_prompt is filepath to prompts.
     else:
         with open(concept["class_prompt"]) as f:
@@ -499,11 +505,10 @@ def _get_class_prompt_collection(args, concept, class_images_dir, pipeline, acce
     return class_prompt_collection
 
 
-def _generate_images_from_prompts(args, concept, class_prompt_collection, 
+def _generate_images_from_prompts(args, num_new_images, concept, class_prompt_collection, 
                                 class_images_dir, pipeline, accelerator, logger):
     """Generate images from the prompt collection."""
-    num_new_images = args.num_class_images
-    logger.info(f"Number of class images to sample: {num_new_images}.")
+    logger.info(f"Number of class images to sample: '{num_new_images}'.")
 
     sample_dataset = PromptDataset(class_prompt_collection, num_new_images)
     sample_dataloader = torch.utils.data.DataLoader(
@@ -513,10 +518,41 @@ def _generate_images_from_prompts(args, concept, class_prompt_collection,
 
     # Clean up existing files
     if os.path.exists(f"{class_images_dir}/captions.txt"):
+        print(f"Removing existing captions file: '{class_images_dir}/captions.txt'")
         os.remove(f"{class_images_dir}/captions.txt")
     if os.path.exists(f"{class_images_dir}/images.txt"):
+        print(f"Removing existing images file: '{class_images_dir}/images.txt'")
         os.remove(f"{class_images_dir}/images.txt")
 
+    negative_prompt = None
+    # Build negative prompt for anchor dataset (prevent UA rebounding)
+    if args.with_negative_prompt:
+        # Append previously unlearned concepts
+        if args.previously_unlearned:
+            negative_prompt_list = ast.literal_eval(args.previously_unlearned)
+        else: 
+            negative_prompt_list = []
+        
+        if args.concept_type == "style":
+            # Add styles to unlearn this training run
+            for concept in args.concepts_list:
+                negative_prompt_list.append(concept["caption_target"])
+
+            # Add " Style" suffix to each negative prompt
+            for i in range(len(negative_prompt_list)):
+                negative_prompt_list[i] = f"{negative_prompt_list[i]} Style"
+        elif args.concept_type == "object":
+            # Add objects to unlearn this training run
+            for concept in args.concepts_list:
+                target_object = concept["caption_target"].split("+")[1]
+                negative_prompt_list.append(target_object)
+        else:
+            raise ValueError(f"'{args.concept_type}' not supported for negative prompting.")
+        
+        # Convert list to string
+        negative_prompt = ", ".join(negative_prompt_list)
+        print(f"Using negative prompt: '{negative_prompt}'")
+    
     for example in tqdm(
         sample_dataloader,
         desc="Generating class images",
@@ -528,9 +564,9 @@ def _generate_images_from_prompts(args, concept, class_prompt_collection,
         ) as f2:
             images = pipeline(
                 example["prompt"],
-                num_inference_steps=25,
+                num_inference_steps=100,
                 guidance_scale=6.0,
-                negative_prompt=[args.caption_target]*len(example["prompt"]) if args.concept_type in ["nudity", "inappropriate_content"] else None,
+                negative_prompt=[negative_prompt]*len(example["prompt"]) if negative_prompt else None,
                 eta=1.0,
             ).images
 
@@ -538,7 +574,7 @@ def _generate_images_from_prompts(args, concept, class_prompt_collection,
                 hash_image = hashlib.sha1(image.tobytes()).hexdigest()
                 image_filename = (
                     class_images_dir
-                    / f"images/{example['index'][i]}-{hash_image}.jpg"
+                    / f"images/{example['index'][i]+1}-{hash_image}.jpg"
                 )
                 image.save(image_filename)
                 f2.write(str(image_filename) + "\n")
@@ -690,7 +726,7 @@ def getanchorprompts(
                 print(f"Prompt: {prompt}")
                 images = pipeline(
                     [prompt] * 10,
-                    num_inference_steps=25,
+                    num_inference_steps=100,
                 ).images
 
                 score = filter(images, mem_impath, return_score=True)
@@ -751,7 +787,7 @@ def getanchorprompts(
         ):
             images = pipeline(
                 [prompt] * 10,
-                num_inference_steps=25,
+                num_inference_steps=100,
             ).images
 
             class_prompt_collection_counter += [

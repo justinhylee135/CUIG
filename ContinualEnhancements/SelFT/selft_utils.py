@@ -60,7 +60,7 @@ def encode_text_diffusers(text_encoder, tokenizer, prompt, device):
     
     return text_embeddings
 
-def get_selft_mask_dict(pipeline, mask_dict_path, grad_dict_path, prompt_list, anchor, topk, loss, device):
+def get_selft_mask_dict(unet, text_encoder, tokenizer, mask_dict_path, grad_dict_path, prompt_list, anchor, topk, loss, device):
     """Get the SelFT mask for the UNet model"""  
     # Check if the mask dictionary exists
     if mask_dict_path is not None and os.path.exists(mask_dict_path):
@@ -75,7 +75,7 @@ def get_selft_mask_dict(pipeline, mask_dict_path, grad_dict_path, prompt_list, a
         print(f"Loaded SelFT grad dictionary from '{grad_dict_path}'")
     else:
         # Get gradient for trainable parameters
-        grad_dict = selft_get_score(pipeline.unet, prompt_list, anchor, loss, device, pipeline.text_encoder, pipeline.tokenizer)
+        grad_dict = selft_get_score(unet, prompt_list, anchor, loss, device, text_encoder, tokenizer)
         
         # Save the gradient dictionary
         if grad_dict_path is not None:
@@ -95,7 +95,7 @@ def get_selft_mask_dict(pipeline, mask_dict_path, grad_dict_path, prompt_list, a
     selected_elements = 0
 
     # Collect all |param*grad| values into a single vector
-    for name, param in pipeline.unet.named_parameters():
+    for name, param in unet.named_parameters():
         # Only gradient activated parameters
         if not param.requires_grad:
             continue
@@ -127,7 +127,7 @@ def get_selft_mask_dict(pipeline, mask_dict_path, grad_dict_path, prompt_list, a
     print(f"Selected {selected_elements:,} of {total_elements:,} elements or {(selected_elements / total_elements):.2%}")
 
     # Create final mask_dict
-    for name, param in pipeline.unet.named_parameters():
+    for name, param in unet.named_parameters():
         if not param.requires_grad:
             mask = torch.zeros_like(param)
         elif name in param_shapes:
@@ -205,7 +205,7 @@ def selft_get_score(unet, prompt_list, anchor, loss, device, text_encoder, token
         timesteps = scheduler.timesteps
 
         # Iterate through timesteps
-        progress_bar = tqdm(range(min(ddim_steps, len(timesteps))), desc="Training")
+        progress_bar = tqdm(range(min(ddim_steps, len(timesteps))), desc="Computing Gradients")
         for t_idx in progress_bar:
             with torch.no_grad():
                 # Initialize random latents for first iteration
