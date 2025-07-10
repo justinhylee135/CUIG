@@ -1,6 +1,9 @@
 import os
 import torch
 import torch.nn.functional as F
+import openai
+import re
+import ast
 
 def apply_gradient_projection(model, filtered_embedding_matrix, device, accelerator=None):
     """
@@ -170,3 +173,98 @@ def remove_similar_embeddings(C, similarity_threshold=0.95):
     print(f"Keeping {len(keep_indices)}/{num_anchors} anchor embeddings after similarity filtering")
     
     return C[:, keep_indices]
+
+def generate_gradient_projection_prompts(file_path, num_prompts, concept_type, previously_unlearned, target_concept_list):
+    """
+    Generate anchor prompts using gpt and write to file_path.
+    Args:
+        file_path (str): Path to save the generated anchor prompts.
+        num_prompts (int): Number of prompts to generate.
+        concept_type (str): Type of concept to generate prompts for.
+        previously_unlearned (list): List of previously unlearned concepts.
+        target_concept_list (list): Current concepts to unlearn
+    """
+
+    openai.api_key = os.getenv("OPENAI_API_KEY")
+        
+    prompt_collection = []
+    if "[" in previously_unlearned:
+        previously_unlearned = ast.literal_eval(previously_unlearned)
+    else:
+        previously_unlearned = [previously_unlearned]
+
+    for i in range(len(target_concept_list)):
+        target_concept_list[i] = target_concept_list[i].replace(" Style", "")
+        target_concept_list[i] = target_concept_list[i].replace("An image of ", "")
+        print(f"Excluding for gradient projection prompts: '{target_concept_list[i]}'")
+    
+    if concept_type == "object":
+        for concept in previously_unlearned:
+            prompt = f"An image of a {concept}"
+            print(f"Adding prompt: '{prompt}'")
+            prompt_collection.append(prompt)
+        messages = [
+            {"role": "system", "content": "You are an expert at generating creative image captions. You will generate random prompts in the format 'An image of a {object}', but the object must not contain but can be distantly related to the objects in '{target_concept_list}'."},
+            {"role": "user", "content": f'Generate {num_prompts} random prompts for images in the format "An image of a {{object}}". None of the objects should contain but can be distantly related to the words in "{target_concept_list}".'},
+        ]
+    elif concept_type == "style":
+        for concept in previously_unlearned:
+            prompt = concept.replace("_", " ")
+            prompt = f"An image in the style of {prompt}"
+            print(f"Adding prompt: '{prompt}'")
+            prompt_collection.append(prompt)
+        messages = [
+            {"role": "system", "content": "You are an expert at generating creative image captions. You will generate random prompts in the format 'An image in the style of {style}', but the style must not contain but can be distantly related to the words in '{target_concept_list}'. Remove unnecessary suffixes like 'style' or 'art'."},
+            {"role": "user", "content": f'Generate {num_prompts} random prompts for images in the format "An image in the style of {{style}}". None of the styles should contain but can be distantly related to the words in "{target_concept_list}".'},
+        ]
+    else:
+        raise ValueError(f"Unsupported concept type: '{concept_type}' for gradient projection prompt generation")
+    
+    numtries = 1
+    while True:
+        print(f"{numtries}. Querying gpt for '{num_prompts - len(prompt_collection)}' prompts...")
+        outputs = openai.ChatCompletion.create(
+            model="gpt-4.1", messages=messages
+        ).choices[0].message.content.lower().split("\n")
+
+        prompt_collection += [
+            x
+            for x in outputs
+            if all(concept.lower() not in x.lower() for concept in target_concept_list) and x.strip() != ''
+        ]
+        messages.append(
+            {"role": "assistant", "content": outputs}
+        )
+        messages.append(
+            {
+                "role": "user",
+                "content": f"Generate {num_prompts-len(prompt_collection)} more captions",
+            }
+        )
+        messages = messages[min(len(messages),-10):]
+        numtries +=1
+        if len(prompt_collection) >= num_prompts or numtries > 10:
+            break
+
+    prompt_collection = clean_prompt(prompt_collection)[
+        :num_prompts
+    ]
+
+    with open(file_path, "w") as f:
+        for prompt in prompt_collection:
+            f.write(prompt + "\n")
+
+    return prompt_collection
+
+def clean_prompt(class_prompt_collection):
+    class_prompt_collection = [
+        re.sub(r"[0-9]+", lambda num: "" * len(num.group(0)), prompt)
+        for prompt in class_prompt_collection
+    ]
+    class_prompt_collection = [
+        re.sub(r"^\.+", lambda dots: "" * len(dots.group(0)), prompt)
+        for prompt in class_prompt_collection
+    ]
+    class_prompt_collection = [x.strip() for x in class_prompt_collection]
+    class_prompt_collection = [x.replace('"', "") for x in class_prompt_collection]
+    return class_prompt_collection

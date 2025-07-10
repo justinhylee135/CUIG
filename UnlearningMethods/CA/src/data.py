@@ -419,7 +419,7 @@ def generate_anchor_images_if_needed(args, accelerator, logger):
         # we need to generate training images
         image_dir = (Path(os.path.join(class_images_dir, "images")))
         num_existing_class_images = len(list(image_dir.iterdir()))
-        print(f"\t{i}. '{concept['caption_target']}': '{num_existing_class_images}' class images at '{image_dir}'.")
+        print(f"\t{i+1}. '{concept['caption_target']}': '{num_existing_class_images}' class images at '{image_dir}'.")
         if (
             num_existing_class_images < args.num_class_images
         ):  

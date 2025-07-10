@@ -27,6 +27,18 @@ def parse_args(input_args=None):
         action='store_true',
         help='Whether to apply gradient projection to preserve anchor concepts.'
     )
+    parser.add_argument(
+        "--gradient_projection_prompts",
+        type=str,
+        default=None,
+        help="Path to a file containing prompts for gradient projection"
+    )
+    parser.add_argument(
+        "--gradient_projection_num_prompts",
+        type=int,
+        default=200,
+        help="Number of prompts to generate for gradient projection"
+    )
     
     # Custom Training Arguments
     parser.add_argument(

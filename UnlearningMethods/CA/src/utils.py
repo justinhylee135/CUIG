@@ -35,7 +35,8 @@ from ContinualEnhancements.SelFT.selft_utils import (
 )
 ### Gradient Projection
 from ContinualEnhancements.Projection.gradient_projection import (
-    get_anchor_embeddings
+    get_anchor_embeddings,
+    generate_gradient_projection_prompts
 )
 
 # Most functions here are code chunks cut from main
@@ -375,15 +376,30 @@ def setup_continual_enhancement(args, unet, text_encoder, tokenizer, device):
     if args.with_gradient_projection:
         print(f"Using gradient projection to preserve anchor concepts.")
         args.anchor_prompts = []
-        for i, concept in enumerate(args.concepts_list):
-            class_prompt_file = concept["class_prompt"]
-            if os.path.isfile(class_prompt_file):
-                with open(class_prompt_file, 'r') as f:
-                    prompts = [line.strip() for line in f.readlines() if line.strip()]
-                print(f"\tConcept {i+1}: Loaded '{len(prompts)}' anchor prompts from '{class_prompt_file}'")
-                args.anchor_prompts.extend(prompts)
+        if args.gradient_projection_prompts:
+            if os.path.isfile(args.gradient_projection_prompts):
+                print(f"Loading anchor prompts from file: '{args.gradient_projection_prompts}'")
+                with open(args.gradient_projection_prompts, 'r') as f:
+                    args.anchor_prompts = [line.strip() for line in f.readlines() if line.strip()]
             else:
-                print(f"\tConcept {i+1}: Warning - class_prompt file '{class_prompt_file}' not found")
+                print(f"Generating gradient projection prompts and saving to file: '{args.gradient_projection_prompts}'")
+                args.anchor_prompts = generate_gradient_projection_prompts(
+                    file_path=args.gradient_projection_prompts,
+                    num_prompts=args.gradient_projection_num_prompts,
+                    concept_type=args.concept_type,
+                    previously_unlearned=args.previously_unlearned,
+                    target_concept_list=args.prompt_list
+                )
+        else:
+            for i, concept in enumerate(args.concepts_list):
+                class_prompt_file = concept["class_prompt"]
+                if os.path.isfile(class_prompt_file):
+                    with open(class_prompt_file, 'r') as f:
+                        prompts = [line.strip() for line in f.readlines() if line.strip()]
+                    print(f"\tConcept {i+1}: Loaded '{len(prompts)}' anchor prompts from '{class_prompt_file}'")
+                    args.anchor_prompts.extend(prompts)
+                else:
+                    print(f"\tConcept {i+1}: Warning - class_prompt file '{class_prompt_file}' not found")
         print(f"Total anchor prompts collected: '{len(args.anchor_prompts)}'")
         args.anchor_embeddings_matrix = get_anchor_embeddings(
             args.anchor_prompts, text_encoder, tokenizer, device

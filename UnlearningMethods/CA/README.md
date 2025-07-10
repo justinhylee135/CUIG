@@ -36,6 +36,26 @@ python -m debugpy --listen 10.6.5.1:5678 --wait-for-client \
 accelerate launch \
     --config_file $REPO_ROOT/UnlearningMethods/CA/accelerate_config.yaml \
     train_ca.py \
+    --caption_target "Cartoon" \
+    --concept_type style \
+    --output_dir $OUTPUT_ROOT/ca/models/independent/base/style/Cartoon_test \
+    --base_model_dir $BASE_MODEL_DIR  \
+    --max_train_steps 1000 \
+    --train_size 200 \
+    --class_data_dir $REPO_ROOT/UnlearningMethods/CA/anchor_datasets/style/painting_unlearncanvas_diffusers_abstracitonism \
+    --class_prompt $REPO_ROOT/UnlearningMethods/CA/anchor_prompts/style/painting.txt  \
+    --scale_lr --hflip --noaug \
+    --enable_xformers_memory_efficient_attention \
+    --with_prior_preservation \
+    --prior_loss_weight 1.0 \
+    --previously_unlearned '["Abstractionism", "Byzantine"]' \
+    --with_gradient_projection \
+    --gradient_projection_prompts $OUTPUT_ROOT/ca/models/independent/base/style/Cartoon_test/prompts.txt
+```
+```bash
+accelerate launch \
+    --config_file $REPO_ROOT/UnlearningMethods/CA/accelerate_config.yaml \
+    train_ca.py \
     --caption_target "Abstractionism" \
     --concept_type style \
     --output_dir $OUTPUT_ROOT/ca/models/independent/gradient_projection/style/Abstractionism \
