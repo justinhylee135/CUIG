@@ -94,28 +94,59 @@ def get_pipelines(model_path, unet_ckpt, use_base_for_frz_unet, devices):
 def get_trainable_params(pipeline, train_method):
     train_param_names = []
     train_param_values = []
-    for name, param in pipeline.unet.named_parameters():
-        # Only cross-attention
-        if train_method == 'xattn':
-            if 'attn2' in name:
+    if "esd" not in train_method:
+        for name, param in pipeline.unet.named_parameters():
+            # Only cross-attention
+            if train_method == 'xattn':
+                if 'attn2' in name:
+                    train_param_names.append(name)
+                    train_param_values.append(param)
+            elif train_method == 'kv-xattn':
+                # Key/Value cross-attention
+                if 'attn2.to_k' in name or 'attn2.to_v' in name:
+                    train_param_names.append(name)
+                    train_param_values.append(param)
+            # Everything but cross-attention
+            elif train_method == 'noxattn':
+                if name.startswith('out.') or 'attn2' in name or 'time_embed' in name:
+                    continue
                 train_param_names.append(name)
                 train_param_values.append(param)
-        # Everything but cross-attention
-        elif train_method == 'noxattn':
-            if name.startswith('out.') or 'attn2' in name or 'time_embed' in name:
-                continue
-            train_param_names.append(name)
-            train_param_values.append(param)
-        # Only self-attention
-        elif train_method == 'selfattn':
-            if 'attn1' in name:
+            # Only self-attention
+            elif train_method == 'selfattn':
+                if 'attn1' in name:
+                    train_param_names.append(name)
+                    train_param_values.append(param)
+            # All parameters
+            elif train_method == 'full':
                 train_param_names.append(name)
                 train_param_values.append(param)
-        # All parameters
-        elif train_method == 'full':
-            train_param_names.append(name)
-            train_param_values.append(param)
-                
+            else:
+                raise ValueError(f"Unsupported train method '{train_method}'")
+    else:
+        # New parameter selection method from updated ESD repo https://github.com/rohitgandikota/erasing/blob/main/esd_sd.py
+        for name, module in pipeline.unet.named_modules():
+            if module.__class__.__name__ in ["Linear", "Conv2d", "LoRACompatibleLinear", "LoRACompatibleConv"]:
+                if train_method == 'esd-x' and 'attn2' in name:
+                    for n, p in module.named_parameters():
+                        train_param_names.append(name+'.'+n)
+                        train_param_values.append(p)
+
+                if train_method == 'esd-u' and ('attn2' not in name):
+                    for n, p in module.named_parameters():
+                        train_param_names.append(name+'.'+n)
+                        train_param_values.append(p)
+                        
+                if train_method == 'esd-all' :
+                    for n, p in module.named_parameters():
+                        train_param_names.append(name+'.'+n)
+                        train_param_values.append(p)
+                        
+                if train_method == 'esd-x-strict' and ('attn2.to_k' in name or 'attn2.to_v' in name):
+                    for n, p in module.named_parameters():
+                        train_param_names.append(name+'.'+n)
+                        train_param_values.append(p)
+            
     return train_param_names, train_param_values
 
 @torch.no_grad()

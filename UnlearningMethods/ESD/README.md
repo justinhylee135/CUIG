@@ -26,22 +26,22 @@ python train_esd.py \
 python train_esd.py \
 --concept 'Abstractionism' \
 --concept_type 'style' \
---train_method 'xattn' \
---save_path $OUTPUT_ROOT/esd/models/independent/projection/gradient_projection/style/Abstractionism.pth \
+--train_method 'kv-xattn' \
+--save_path $OUTPUT_ROOT/esd/models/continual/projection/gradient_projection/style/thruAbstractionism.pth \
 --base_model_dir $BASE_MODEL_DIR \
 --with_gradient_projection \
---anchor_prompts_path $REPO_ROOT/UnlearningMethods/CA/anchor_prompts/style/painting.txt
+--gradient_projection_prompts $OUTPUT_ROOT/esd/models/continual/projection/gradient_projection/style/thruAbstractionism_prompts.txt
 ```
 #### Object
 ```bash
 python -m debugpy --listen 10.6.8.8:5678 --wait-for-client \
-train_esd.py \
+python train_esd.py \
 --concept 'Bears' \
 --concept_type 'object' \
---train_method 'noxattn' \
---save_path $OUTPUT_ROOT/esd/models/independent/base/object/Bears.pth \
+--train_method 'esd-u' \
+--save_path $OUTPUT_ROOT/esd/models/independent/base/object/Bears_test.pth \
 --base_model_dir $BASE_MODEL_DIR \
---overwrite_existing_ckpt
+--overwrite_existing_ckpt 
 ```
 #### Celebrity
 

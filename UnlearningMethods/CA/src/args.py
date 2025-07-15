@@ -36,11 +36,23 @@ def parse_args(input_args=None):
     parser.add_argument(
         "--gradient_projection_num_prompts",
         type=int,
-        default=200,
+        default=400,
         help="Number of prompts to generate for gradient projection"
+    )
+    parser.add_argument(
+        "--gradient_projection_no_dual_domain",
+        action='store_true',
+        help='Whether to generate dual domains for prompts in gradient projection',
+        default=False
     )
     
     # Custom Training Arguments
+    parser.add_argument(
+        '--with_style_replacement',
+        help='Replace style in prompt rather than appending',
+        action='store_true',
+        default=False
+    )
     parser.add_argument(
         '--with_negative_prompt',
         help='Use negative prompt for generating anchor dataset',
@@ -475,15 +487,5 @@ def parse_args(input_args=None):
                 raise ValueError("You must specify a data directory for class images.")
             if args.class_prompt is None:
                 raise ValueError("You must specify prompt for class images.")
-    else:
-        # logger is not available yet
-        if args.class_data_dir is not None:
-            warnings.warn(
-                "You need not use --class_data_dir without --with_prior_preservation."
-            )
-        if args.class_prompt is not None:
-            warnings.warn(
-                "You need not use --class_prompt without --with_prior_preservation."
-            )
 
     return args

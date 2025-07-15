@@ -15,13 +15,13 @@ cd $REPO_ROOT/UnlearningMethods/CA
 ### Independent
 #### Style
 ```bash
+python -m debugpy --listen 10.6.5.1:5678 --wait-for-client \
 accelerate launch \
     --config_file $REPO_ROOT/UnlearningMethods/CA/accelerate_config.yaml \
-python -m debugpy --listen 10.6.5.1:5678 --wait-for-client \
     train_ca.py \
     --caption_target "Abstractionism" \
     --concept_type style \
-    --output_dir $OUTPUT_ROOT/ca/models/independent/base/style/Abstractionism_retention \
+    --output_dir $OUTPUT_ROOT/ca/models/independent/base/style/Abstractionism_test \
     --base_model_dir $BASE_MODEL_DIR  \
     --max_train_steps 1000 \
     --train_size 200 \
@@ -30,62 +30,58 @@ python -m debugpy --listen 10.6.5.1:5678 --wait-for-client \
     --scale_lr --hflip --noaug \
     --enable_xformers_memory_efficient_attention \
     --with_prior_preservation \
-    --with_negative_prompt
 ```
 ```bash
 accelerate launch \
-    --config_file $REPO_ROOT/UnlearningMethods/CA/accelerate_config.yaml \
+    --config_file /users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/CA/accelerate_config.yaml \
     train_ca.py \
     --caption_target "Cartoon" \
     --concept_type style \
-    --output_dir $OUTPUT_ROOT/ca/models/independent/base/style/Cartoon_test \
-    --base_model_dir $BASE_MODEL_DIR  \
+    --output_dir /fs/scratch/PAS2099/lee.10369/CUIG/ca/models/independent/base/style/no_retention_wsr/Cartoon \
+    --base_model_dir /users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/base_models/UnlearnCanvas  \
     --max_train_steps 1000 \
     --train_size 200 \
-    --class_data_dir $REPO_ROOT/UnlearningMethods/CA/anchor_datasets/style/painting_unlearncanvas_diffusers_abstracitonism \
-    --class_prompt $REPO_ROOT/UnlearningMethods/CA/anchor_prompts/style/painting.txt  \
     --scale_lr --hflip --noaug \
     --enable_xformers_memory_efficient_attention \
-    --with_prior_preservation \
-    --prior_loss_weight 1.0 \
-    --previously_unlearned '["Abstractionism", "Byzantine"]' \
-    --with_gradient_projection \
-    --gradient_projection_prompts $OUTPUT_ROOT/ca/models/independent/base/style/Cartoon_test/prompts.txt
-```
-```bash
-accelerate launch \
-    --config_file $REPO_ROOT/UnlearningMethods/CA/accelerate_config.yaml \
-    train_ca.py \
-    --caption_target "Abstractionism" \
-    --concept_type style \
-    --output_dir $OUTPUT_ROOT/ca/models/independent/gradient_projection/style/Abstractionism \
-    --base_model_dir $BASE_MODEL_DIR  \
-    --max_train_steps 1000 \
-    --num_class_images 200 \
-    --class_data_dir $REPO_ROOT/UnlearningMethods/CA/anchor_datasets/style/painting_unlearncanvas_diffusers \
-    --class_prompt $REPO_ROOT/UnlearningMethods/CA/anchor_prompts/style/painting.txt  \
-    --scale_lr --hflip --noaug \
-    --enable_xformers_memory_efficient_attention \
-    --with_gradient_projection
-    # --with_prior_preservation 
+    --class_data_dir /fs/scratch/PAS2099/lee.10369/CUIG/ca/models/independent/base/style/no_retention_wsr/Cartoon/anchor_dataset \
+    --class_prompt /fs/scratch/PAS2099/lee.10369/CUIG/ca/models/independent/base/style/no_retention_wsr/Cartoon/prompts.txt  \
+    --with_style_replacement
 ```
 #### Object
 ```bash
 accelerate launch \
     --config_file $REPO_ROOT/UnlearningMethods/CA/accelerate_config.yaml \
-python -m debugpy --listen 10.6.5.4:5678 --wait-for-client \
     train_ca.py \
-    --caption_target "*+An image of Bears" \
+    --caption_target "horse+bird" \
     --concept_type object \
-    --output_dir /fs/scratch/PAS2099/lee.10369/CUIG/ca/models/independent/base/object/Bears_test \
+    --output_dir /fs/scratch/PAS2099/lee.10369/CUIG/ca/models/independent/base/object/Birds_test7 \
+    --unet_ckpt /fs/scratch/PAS2099/lee.10369/CUIG/ca/models/independent/base/object/no_retention_bsz_8/Bears/delta.bin \
     --base_model_dir /users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/base_models/UnlearnCanvas  \
-    --max_train_steps 2000 \
+    --max_train_steps 100 \
     --num_class_images 200 \
     --class_data_dir /users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/CA/anchor_datasets/object/Horses \
     --class_prompt /users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/CA/anchor_prompts/object/Horses.txt  \
     --scale_lr --hflip --noaug \
     --enable_xformers_memory_efficient_attention \
-    --with_prior_preservation \
+    --train_batch_size 8 \
+    --overwrite_existing_ckpt
+```
+
+```bash
+python -m debugpy --listen 10.6.5.4:5678 --wait-for-client \
+accelerate launch \
+    --config_file $REPO_ROOT/UnlearningMethods/CA/accelerate_config.yaml \
+    train_ca.py \
+    --caption_target "Trees+Towers" \
+    --concept_type object \
+    --output_dir /fs/scratch/PAS2099/lee.10369/CUIG/ca/models/independent/base/object/towers_test2 \
+    --base_model_dir /users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/base_models/UnlearnCanvas  \
+    --max_train_steps 2000 \
+    --num_class_images 200 \
+    --class_data_dir /users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/CA/anchor_datasets/object/Trees \
+    --class_prompt /users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/CA/anchor_prompts/object/Trees.txt  \
+    --scale_lr --hflip --noaug \
+    --enable_xformers_memory_efficient_attention \
     --overwrite_existing_ckpt 
 ```
 #### Celebrity
@@ -116,21 +112,20 @@ train_ca.py \
 #### Style
 ```bash
 accelerate launch \
-    --config_file $REPO_ROOT/UnlearningMethods/CA/accelerate_config.yaml \
+    --config_file /users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/CA/accelerate_config.yaml \
     train_ca.py \
     --caption_target '["Abstractionism", "Byzantine"]' \
     --concept_type style \
-    --output_dir $OUTPUT_ROOT/ca/models/simultaneous/base/style/thruByzantine \
-    --base_model_dir $BASE_MODEL_DIR  \
-    --max_train_steps 1000 \
+    --output_dir /fs/scratch/PAS2099/lee.10369/CUIG/ca/models/simultaneous/base/early_stopping/style/thruAbstractionism \
+    --base_model_dir /users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/base_models/UnlearnCanvas  \
     --train_size 200 \
-    --class_data_dir $REPO_ROOT/UnlearningMethods/CA/anchor_datasets/style/painting_unlearncanvas_diffusers \
-    --class_prompt $REPO_ROOT/UnlearningMethods/CA/anchor_prompts/style/painting.txt  \
     --scale_lr --hflip --noaug \
     --enable_xformers_memory_efficient_attention \
-    --with_prior_preservation \
+    --class_data_dir /users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/CA/anchor_datasets/style/painting_unlearncanvas_diffusers \
+    --class_prompt /users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/CA/anchor_prompts/style/painting.txt \
+    --max_train_steps 6000 \
     --eval_every 100 \
-    --classifier_dir $REPO_ROOT/Evaluation/UnlearnCanvas/classifiers
+    --classifier_dir /users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/Evaluation/UnlearnCanvas/classifiers
 ```
 #### Object
 #### Celebrity
@@ -151,7 +146,7 @@ accelerate launch \
     train_ca.py \
     --caption_target "Abstractionism" \
     --concept_type style \
-    --output_dir $OUTPUT_ROOT/ca/models/continual/selft/style/thruAbstractionism \
+    --output_dir $OUTPUT_ROOT/ca/models/continual/selft/style/0.05/thruAbstractionism \
     --base_model_dir $BASE_MODEL_DIR  \
     --max_train_steps 1000 \
     --train_size 200 \
@@ -160,9 +155,46 @@ accelerate launch \
     --scale_lr --hflip --noaug \
     --enable_xformers_memory_efficient_attention \
     --selft_loss "ca" \
-    --selft_topk 0.01 \
-    --selft_grad_dict_path $OUTPUT_ROOT/ca/models/continual/selft/style/thruAbstractionism/grad_dict.pt
+    --selft_topk 0.05 \
+    --selft_grad_dict_path $OUTPUT_ROOT/ca/models/continual/selft/style/thruAbstractionism/0.05/grad_dict.pt
 ```
 
+### Gradient Projection
+#### Style
+```bash
+accelerate launch \
+--config_file /users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/CA/accelerate_config.yaml \
+    train_ca.py \
+    --caption_target "Abstractionism" \
+    --concept_type style \
+    --output_dir /fs/scratch/PAS2099/lee.10369/CUIG/ca/models/continual/projection/style/gradient_projection/thruAbstractionism \
+    --base_model_dir /users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/base_models/UnlearnCanvas  \
+    --max_train_steps 1000 \
+    --train_size 200 \
+    --class_data_dir /users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/CA/anchor_datasets/style/painting_unlearncanvas_diffusers \
+    --class_prompt /users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/CA/anchor_prompts/style/painting.txt  \
+    --scale_lr --hflip --noaug \
+    --enable_xformers_memory_efficient_attention \
+    --with_gradient_projection \
+    --gradient_projection_prompts "/fs/scratch/PAS2099/lee.10369/CUIG/ca/models/continual/projection/style/gradient_projection/thruAbstractionism/prompts.txt"
+```
+
+#### Object
+```bash
+accelerate launch \
+    --config_file /users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/CA/accelerate_config.yaml \
+    train_ca.py \
+    --caption_target "horse+bear" \
+    --concept_type object \
+    --output_dir /fs/scratch/PAS2099/lee.10369/CUIG/ca/models/continual/projection/object/gradient_projection_no_prompts/thruBears \
+    --base_model_dir /users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/base_models/UnlearnCanvas  \
+    --max_train_steps 2000 \
+    --num_class_images 200 \
+    --class_data_dir /users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/CA/anchor_datasets/object/Horses \
+    --class_prompt /users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/CA/anchor_prompts/object/Horses.txt  \
+    --scale_lr --hflip --noaug \
+    --enable_xformers_memory_efficient_attention \
+    --with_gradient_projection
+```
 ---
 

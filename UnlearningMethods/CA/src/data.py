@@ -41,7 +41,7 @@ def collate_fn(examples, with_prior_preservation):
     mask = [example["mask"] for example in examples]
     image_paths = [example["image_path"] for example in examples]
     target_prompts = [example["target_prompt"] for example in examples]
-    target_anchor_prompts = [example["anchor_prompt"] for example in examples]
+    anchor_prompts = [example["anchor_prompt"] for example in examples]
     # Concat class and instance examples for prior preservation.
     # We do this to avoid doing two forward passes.
     if with_prior_preservation:
@@ -63,7 +63,7 @@ def collate_fn(examples, with_prior_preservation):
         "mask": mask.unsqueeze(1),
         "image_paths": image_paths,
         "target_prompts": target_prompts,
-        "target_anchor_prompts": target_anchor_prompts,
+        "anchor_prompts": anchor_prompts,
     }
     return batch
 
@@ -95,6 +95,7 @@ class CustomDiffusionDataset(Dataset):
         self,
         concepts_list,
         concept_type,
+        with_style_replacement,
         tokenizer,
         size=512,
         center_crop=False,
@@ -109,6 +110,7 @@ class CustomDiffusionDataset(Dataset):
         self.interpolation = Image.LANCZOS
         self.aug = aug
         self.concept_type = concept_type
+        self.with_style_replacement = with_style_replacement
 
         self.instance_images_path = []
         self.class_images_path = []
@@ -190,15 +192,27 @@ class CustomDiffusionDataset(Dataset):
 
     def __getprompt__(self, instance_prompt, instance_target):
         if self.concept_type == "style":
-            r = np.random.choice([0, 1])
-            instance_prompt = instance_prompt.replace(".", "")
+            # Clean up instance_target
             instance_target = instance_target.replace("_", " ")
             instance_target = instance_target.replace(" Style", "")
-            instance_prompt = (
-                f"{instance_prompt}, in {instance_target} Style"
-                if r == 0
-                else f"In {instance_target} Style, {instance_prompt}"
-            )
+
+            # Replace style in prompt or append it
+            if self.with_style_replacement:
+                # Replace the style in the prompt with the target style
+                instance_prompt = re.sub(
+                    r"in\s+.*?style", f"in {instance_target} style", instance_prompt, flags=re.IGNORECASE
+                )
+                if instance_prompt == instance_target:
+                    instance_prompt = f"An image in {instance_target} Style"
+                    print(f"Unsuccessful replacement for style '{instance_target}' in prompt '{instance_prompt}'. Using '{instance_prompt}' instead.")
+            else:
+                r = np.random.choice([0, 1])
+                instance_prompt = instance_prompt.replace(".", "")
+                instance_prompt = (
+                    f"{instance_prompt}, in {instance_target} Style"
+                    if r == 0
+                    else f"In {instance_target} Style, {instance_prompt}"
+                )
         elif self.concept_type in ["nudity", "inappropriate_content"]:
             r = np.random.choice([0, 1, 2])
             instance_prompt = (
@@ -215,6 +229,9 @@ class CustomDiffusionDataset(Dataset):
             else:
                 # Replace anchor with target in prompt
                 instance_prompt = re.sub(re.escape(anchor), target, instance_prompt, flags=re.IGNORECASE)
+                if instance_prompt == anchor:
+                    instance_prompt = f"A {target} image"
+                    print(f"Unsuccessful replacement for anchor '{anchor}' in prompt '{instance_prompt}'. Using '{instance_prompt}' instead.")
         elif self.concept_type == "memorization":
             instance_prompt = instance_target.split("+")[1]
         return instance_prompt
@@ -404,6 +421,22 @@ def generate_anchor_images_if_needed(args, accelerator, logger):
     """
     # Generate class images if prior preservation is enabled.
     print(f"Processing '{len(args.concepts_list)}' concepts.")
+
+    # Build string of concepts to exclude from prompt generation
+    excluded_concepts = []
+    for i, concept in enumerate(args.concepts_list):
+        excluded_concepts.append(
+            concept["caption_target"].replace("_", " ").replace(" Style", "")
+        )
+    if args.previously_unlearned:
+        excluded_concepts.extend(
+            ast.literal_eval(args.previously_unlearned)
+        )
+    if len(excluded_concepts) > 1:
+        excluded_concepts_str = ", ".join(excluded_concepts[:-1]) + ", or " + excluded_concepts[-1]
+    else:
+        excluded_concepts_str = ", ".join(excluded_concepts)
+
     for i, concept in enumerate(args.concepts_list):
         # directly path to ablation images and its corresponding prompts is provided.
         if (
@@ -427,7 +460,7 @@ def generate_anchor_images_if_needed(args, accelerator, logger):
             print(f"Only '{num_existing_class_images}' class images found at '{image_dir}'. Generating '{num_to_generate}' more images...")
             pipeline = _setup_generation_pipeline(args, accelerator)
             class_prompt_collection = _get_class_prompt_collection(
-                args, concept, class_images_dir, pipeline, accelerator
+                args, concept, excluded_concepts_str, class_images_dir, pipeline, accelerator
             )
             _generate_images_from_prompts(
                 args, num_to_generate, concept, class_prompt_collection, class_images_dir, 
@@ -475,28 +508,29 @@ def _setup_generation_pipeline(args, accelerator):
     return pipeline
 
 
-def _get_class_prompt_collection(args, concept, class_images_dir, pipeline, accelerator):
+def _get_class_prompt_collection(args, concept, excluded_concepts_str, class_images_dir, pipeline, accelerator):
     """Get collection of prompts for class image generation."""
     # need to create prompts using class_prompt.
     if not os.path.isfile(concept["class_prompt"]):
         # LLM based prompt collection for ablating new objects or memorization images
-        print(f"Generating class prompts for concept: '{concept['class_prompt']}'")
-        class_prompt = concept["class_prompt"]
+        class_prompt = concept['caption_target']
+        print(f"Generating anchor prompts for '{class_prompt}' to: '{concept['class_prompt']}'")
         # in case of object query chatGPT to generate captions containing the anchor category
         class_prompt_collection, caption_target = getanchorprompts(
             pipeline,
             accelerator,
             class_prompt,
+            excluded_concepts_str,
             args.concept_type,
             class_images_dir,
             args.num_class_prompts,
             mem_impath=args.mem_impath if args.concept_type == "memorization" else None,
             model_id=args.prompt_gen_model
         )
-        concept["caption_target"] += f";*+{caption_target}"
-        with open(class_images_dir / "caption_target.txt", "w") as f:
-            f.write(concept["caption_target"])
-        print(class_prompt_collection, concept["caption_target"])
+        with open(concept["class_prompt"], "w") as f:
+            for prompt in class_prompt_collection:
+                f.write(prompt.strip() + "\n")
+        print(f"Saved {len(class_prompt_collection)} anchor prompts to '{concept['class_prompt']}'.")
     # class_prompt is filepath to prompts.
     else:
         with open(concept["class_prompt"]) as f:
@@ -605,6 +639,7 @@ def getanchorprompts(
     pipeline,
     accelerator,
     class_prompt,
+    excluded_concepts_str,
     concept_type,
     class_images_dir,
     num_class_images=200,
@@ -623,27 +658,50 @@ def getanchorprompts(
         )
     class_prompt_collection = []
     caption_target = []
-    if concept_type in ["object", "nudity", "inappropriate_content"]:
+    if concept_type in ["object", "nudity", "inappropriate_content", "style"]:
         if model_id == "openai":
-            messages = [
-                {"role": "system", "content": "You can describe any image via text and provide captions for wide variety of images that is possible to generate."},
-                {"role": "user", "content": f'Generate {num_class_images} captions for images containing a {class_prompt}. The caption should also contain the word "{class_prompt}" '},
-            ]
+            if concept_type == "style":
+                messages = [
+                    {"role": "system", "content": "You can describe any image via text and provide captions for wide variety of images that is possible to generate. You generate strictly formatted image captions without any commentary, explanations, or introductions. You just output the prompts, one per line."},
+                    {"role": "user", "content": f"Generate {num_class_images} random prompts in the format 'A {{object}} image in {{style}} style'. Don't include any prompts with styles similar to {excluded_concepts_str}."},
+                ]
+            elif concept_type == "object":
+                class_prompt = class_prompt.split("+")[0]
+                messages = [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are an expert at generating concise, descriptive image captions for synthetic image generation. "
+                            "Your output is a list of short captions, one per line, with no commentary or explanation. "
+                            "Each caption should describe an image containing exactly one subject."
+                        )
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Generate {num_class_images} short captions for images that feature exactly one {class_prompt}. "
+                            f"The image must not contain any other animals, humans, or objects. "
+                            f"Each caption must include the word \"{class_prompt}\". "
+                            f"The caption should be general enough that replacing the word \"{class_prompt}\" with another animal, human, or object would still result in a plausible description."
+                        )
+                    }
+                ]
+            print(f"Using GPT query: '{messages[1]['content']}'")
         else:
             messages = [
                     {"role": "system", "content": "You can describe any image via text and provide captions for wide variety of images that is possible to generate."},
-                    {"role": "user", "content": f'''Generate {num_class_images} caption for images containing a {class_prompt}. The caption should also contain the word "{class_prompt}". DO NOT add any unnecessary adjectives or emotion words in the caption. Please keep the caption factual and terse but complete. DO NOT add any unnecessary speculation about the things that are not part of the image such as "the image is inspiring to viewers" or "seeing this makes you feel joy". DO NOT add things such as "creates a unique and entertaining visual", as these descriptions are interpretations and not a part of the image itself. The description should be purely factual, with no subjective speculation.
+                    {"role": "user", "content": f'''Generate {num_class_images} caption for images containing a {class_prompt}. The caption must also contain the word "{class_prompt}". DO NOT add any unnecessary adjectives or emotion words in the caption. Please keep the caption factual and terse but complete. DO NOT add any unnecessary speculation about the things that are not part of the image such as "the image is inspiring to viewers" or "seeing this makes you feel joy". DO NOT add things such as "creates a unique and entertaining visual", as these descriptions are interpretations and not a part of the image itself. The description should be purely factual, with no subjective speculation.
 
                             Example captions for the category "cat" are:
                             1. A photo of a siamese cat playing in a garden.
                             2. A cat is sitting beside a book in a library.
                             4. Watercolor style painting of a cat. '''
                     }, ]
-        numtries = 0
+        numtries = 1
         while True:
             if model_id == "openai":
                 outputs = openai.ChatCompletion.create(
-                    model="gpt-3.5-turbo", messages=messages
+                    model="gpt-4.1", messages=messages
                 ).choices[0].message.content.lower().split("\n")
             else:
                 terminators = [
@@ -659,8 +717,8 @@ def getanchorprompts(
                     top_p=0.9,
                 )[0]["generated_text"][-1]['content'].split("\n")[1:-1]
 
-            print(outputs)
-            if concept_type in ["object", "nudity", "inappropriate_content"]:
+            print(f"{numtries}: {len(outputs)} outputs generated.")
+            if concept_type in ["object", "nudity", "inappropriate_content", "style"]:
                 class_prompt_collection += [
                     x for x in outputs if x != ''
                 ]
@@ -671,7 +729,7 @@ def getanchorprompts(
                     if (class_prompt in x and x != '')
                 ]
             messages.append(
-                {"role": "assistant", "content": outputs}
+                {"role": "assistant", "content": "\n".join(outputs)}
             )
             messages.append(
                 {
@@ -680,14 +738,12 @@ def getanchorprompts(
                 }
             )
             messages = messages[min(len(messages),-10):]
-            print(len(class_prompt_collection))
             numtries +=1
             if len(class_prompt_collection) >= num_class_images or numtries > 10:
                 break
         class_prompt_collection = clean_prompt(class_prompt_collection)[
             :num_class_images
-        ]
-
+        ]  
     elif concept_type == "memorization":
         pipeline.scheduler = DPMSolverMultistepScheduler.from_config(
             pipeline.scheduler.config
@@ -846,6 +902,7 @@ def setup_data_and_scheduler(args, tokenizer, accelerator, optimizer):
     train_dataset = CustomDiffusionDataset(
         concepts_list=args.concepts_list,
         concept_type=args.concept_type,
+        with_style_replacement=args.with_style_replacement,
         tokenizer=tokenizer,
         with_prior_preservation=args.with_prior_preservation,
         size=args.resolution,

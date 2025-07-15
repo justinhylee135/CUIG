@@ -25,36 +25,45 @@ def apply_gradient_projection(model, filtered_embedding_matrix, device, accelera
     
     # Compute projection matrix: P = I - C(C^T C)^(-1)C^T
     try:
-        # Normal inverse with regularization
+        # Compute C^T C
         CTC = C.T @ C  # [num_anchors, num_anchors]
+
+        # Regularization term (scaled identity matrix) is added to ensure numerical stability
         reg_strength = max(1e-4, 1e-6 * torch.trace(CTC).item() / num_anchors)
         reg_term = reg_strength * torch.eye(num_anchors, device=device, dtype=CTC.dtype)
         
-        # Check condition number for numerical stability
+        # Invertible matrix has real and positive eigenvalues
         eigenvals = torch.linalg.eigvals(CTC + reg_term).real
+        
+        # Check condition number for numerical stability
         condition_number = eigenvals.max() / eigenvals.min()
         
-        if condition_number > 1e10:  # Matrix is too ill-conditioned
+        # If matrix is too sensitive to small changes, matrix is ill-conditioned
+        if condition_number > 1e10:
             raise torch.linalg.LinAlgError("Matrix is ill-conditioned")
-            
+
+        # Invert C^T C with regularization term
         CTC_inv = torch.linalg.inv(CTC + reg_term)
         
-        # Projection matrix P = I - C @ CTC_inv @ C.T
+        # Orthogonal Projection matrix P = I - C @ CTC_inv @ C.T
         I = torch.eye(embedding_dim, device=device, dtype=C.dtype)
         P = I - C @ CTC_inv @ C.T  # [embedding_dim, embedding_dim]
         
     except torch.linalg.LinAlgError:
         # Fallback to pseudoinverse if matrix is singular
         print(f"Warning: Using pseudoinverse for gradient projection")
+
+        # Compute Moore-Penrose pseudoinverse of C^T
         C_pinv = torch.linalg.pinv(C.T)  # [num_anchors, embedding_dim]
         
         # Projection matrix P = I - C @ C_pinv
         I = torch.eye(embedding_dim, device=device, dtype=C.dtype)
         P = I - C @ C_pinv
     
-    # Apply projection to cross-attention gradients
+    # Get model with gradients
     model_to_process = accelerator.unwrap_model(model) if accelerator else model
-    
+
+    # Iterate through all K and V weights in cross-attention layers    
     for name, param in model_to_process.named_parameters():
         if (param.grad is not None and 
             'attn2' in name and 
@@ -77,14 +86,15 @@ def apply_gradient_projection(model, filtered_embedding_matrix, device, accelera
                 param.grad.data = projected_grad.view(original_shape)
 
 def get_anchor_embeddings(anchor_prompts, text_encoder, tokenizer, device):
-    """    Encode anchor prompts into text embeddings.
+    """
+    Encode anchor prompts into text embeddings, extracting concept tokens after format prefixes.
+    
     Args:
         anchor_prompts (list): List of anchor prompts to encode.
         text_encoder: The text encoder model.
         tokenizer: The tokenizer for the text encoder.
         device: Device to run computations on (e.g., 'cuda' or 'cpu').
     """    
-    # Encode anchor prompts to get text embeddings
     if len(anchor_prompts) > 0:
         print(f"Encoding {len(anchor_prompts)} anchor prompts...")
         anchor_embeddings = []
@@ -95,42 +105,34 @@ def get_anchor_embeddings(anchor_prompts, text_encoder, tokenizer, device):
             batch_prompts = anchor_prompts[i:i+batch_size]
             
             with torch.no_grad():
-                # Tokenize batch
-                text_inputs = tokenizer(
-                    batch_prompts,
-                    padding="max_length",
-                    max_length=tokenizer.model_max_length,
-                    truncation=True,
-                    return_tensors="pt",
-                ).to(device)
-                
-                # Get text embeddings
-                text_embeddings = text_encoder(text_inputs.input_ids)[0]
-                
-                # Get last meaningful token for each prompt
-                attention_mask = text_inputs.attention_mask
-                last_token_indices = attention_mask.sum(dim=1) - 1
-                
-                # Extract embeddings for last tokens
-                batch_embeddings = text_embeddings[torch.arange(len(batch_prompts)), last_token_indices, :]
-                anchor_embeddings.extend([emb.cpu() for emb in batch_embeddings])
+                for prompt in batch_prompts:
+                    # Tokenize individual prompt
+                    text_inputs = tokenizer(
+                        prompt,
+                        padding="max_length",
+                        max_length=tokenizer.model_max_length,
+                        truncation=True,
+                        return_tensors="pt",
+                    ).to(device)
+                    
+                    # Get text embeddings
+                    text_embeddings = text_encoder(text_inputs.input_ids)[0]
+                    
+                    # Extract concept embedding after prefix
+                    concept_embedding = extract_concept_tokens_after_prefix(
+                        text_embeddings.unsqueeze(0), text_inputs, tokenizer
+                    )
+                    
+                    anchor_embeddings.append(concept_embedding.cpu())
         
         print(f"Successfully encoded {len(anchor_embeddings)} anchor embeddings")
         
         print(f"Now filtering to remove redundant embeddings...")
-        # Convert to tensor matrix
-        anchor_embedding_tensors = []
-        for emb in anchor_embeddings:
-            if isinstance(emb, torch.Tensor):
-                emb_tensor = emb.to(device).flatten()
-            else:
-                emb_tensor = torch.tensor(emb, device=device).flatten()
-            anchor_embedding_tensors.append(emb_tensor)
         
         # Stack into matrix [embedding_dim, num_anchors]
-        C = torch.stack(anchor_embedding_tensors, dim=1)
+        C = torch.stack(anchor_embeddings, dim=1)
         
-        # Remove similar embeddings once
+        # Remove similar embeddings
         C_filtered = remove_similar_embeddings(C)
         
         print(f"Final anchor embedding matrix shape: {C_filtered.shape}")
@@ -138,6 +140,146 @@ def get_anchor_embeddings(anchor_prompts, text_encoder, tokenizer, device):
         return C_filtered
     else:
         raise ValueError("No anchor prompts provided for encoding.")
+
+def extract_concept_tokens_after_prefix(text_embeddings, text_inputs, tokenizer):
+    """
+    Extract embeddings for tokens after format prefixes and average them if multiple.
+    
+    Args:
+        text_embeddings: Full sequence embeddings [seq_len, hidden_dim] or [batch_size, seq_len, hidden_dim]
+        text_inputs: Tokenized inputs
+        tokenizer: The tokenizer used
+        
+    Returns:
+        Tensor: Averaged embedding for concept tokens
+    """
+    # Handle different tensor shapes
+    if len(text_embeddings.shape) == 2:
+        # Shape is [seq_len, hidden_dim] - add batch dimension
+        text_embeddings = text_embeddings.unsqueeze(0)
+        seq_len, hidden_dim = text_embeddings.shape[1], text_embeddings.shape[2]
+        batch_size = 1
+    elif len(text_embeddings.shape) == 3:
+        # Shape is [batch_size, seq_len, hidden_dim]
+        batch_size, seq_len, hidden_dim = text_embeddings.shape
+    elif len(text_embeddings.shape) == 4:
+        # Shape is [batch_size, extra_dim, seq_len, hidden_dim] - squeeze extra dimension
+        original_shape = text_embeddings.shape
+        text_embeddings = text_embeddings.squeeze(1)  # Remove second dimension
+        batch_size, seq_len, hidden_dim = text_embeddings.shape
+    else:
+        raise ValueError(f"Unexpected text_embeddings shape: {text_embeddings.shape}")
+    
+    # Convert input_ids back to tokens
+    tokens = tokenizer.convert_ids_to_tokens(text_inputs.input_ids[0])
+    
+    # Define prefixes to look for
+    style_prefix_tokens = tokenizer.tokenize("an image in the style of")
+    object_prefix_tokens = tokenizer.tokenize("an image of a")
+    object_prefix_tokens_alt = tokenizer.tokenize("an image of")  # Without "a"
+    
+    # Find where concept tokens start
+    concept_start_idx = None
+    
+    # Check for style prefix
+    if find_token_sequence(tokens, style_prefix_tokens) is not None:
+        prefix_end = find_token_sequence(tokens, style_prefix_tokens) + len(style_prefix_tokens)
+        concept_start_idx = prefix_end
+        
+    # Check for object prefix (with "a")
+    elif find_token_sequence(tokens, object_prefix_tokens) is not None:
+        prefix_end = find_token_sequence(tokens, object_prefix_tokens) + len(object_prefix_tokens)
+        concept_start_idx = prefix_end
+        
+    # Check for object prefix (without "a")
+    elif find_token_sequence(tokens, object_prefix_tokens_alt) is not None:
+        prefix_end = find_token_sequence(tokens, object_prefix_tokens_alt) + len(object_prefix_tokens_alt)
+        concept_start_idx = prefix_end
+    
+    # If no prefix found, use last meaningful token
+    if concept_start_idx is None:
+        attention_mask = text_inputs.attention_mask[0]
+        print(f"Sequence Length: {seq_len}, Attention Mask Length: {attention_mask.sum().item()}")
+        last_token_idx = min(attention_mask.sum().item() - 2, seq_len - 1)
+        last_token_idx = max(0, last_token_idx)  # Ensure non-negative
+        print(f"Warning: Could not find expected prefix in tokens: '{tokens}'")
+        print(f"Using last meaningful token at index {last_token_idx} '{tokens[last_token_idx]}' as fallback")
+        return text_embeddings[0, last_token_idx, :]
+    
+    # Find end of meaningful tokens (before padding)
+    attention_mask = text_inputs.attention_mask[0]
+    last_meaningful_idx = min(attention_mask.sum().item() - 1, seq_len - 1)
+    
+    # Ensure concept_start_idx is within bounds
+    concept_start_idx = min(concept_start_idx, seq_len - 1)
+    concept_start_idx = max(0, concept_start_idx)
+    
+    # Extract concept token indices with bounds checking
+    concept_end_idx = min(last_meaningful_idx + 1, seq_len)  # Don't exceed tensor length
+    concept_indices = list(range(concept_start_idx, concept_end_idx))
+    
+    # Additional bounds checking and filtering
+    valid_concept_indices = []
+    for idx in concept_indices:
+        # Check bounds
+        if 0 <= idx < seq_len and idx < len(tokens):
+            # Check if not special token
+            if not tokens[idx].startswith('[') and tokens[idx] != '<|endoftext|>' and tokens[idx] != '<pad>':
+                valid_concept_indices.append(idx)
+    
+    concept_indices = valid_concept_indices
+    
+    # If no valid concept tokens found, fallback to last token
+    if not concept_indices:
+        attention_mask = text_inputs.attention_mask[0]
+        last_token_idx = min(attention_mask.sum().item() - 2, seq_len - 1)
+        last_token_idx = max(0, last_token_idx)
+        print(f"Warning: No valid concept tokens found after prefix in: '{tokens}'")
+        print(f"Using last meaningful token at index {last_token_idx} '{tokens[last_token_idx]}' as fallback")
+        return text_embeddings[0, last_token_idx, :]
+
+    # Ensure indices are within bounds one more time
+    concept_indices = [idx for idx in concept_indices if 0 <= idx < seq_len]
+    
+    if not concept_indices:
+        print(f"Error: All concept indices out of bounds!")
+        return text_embeddings[0, 0, :]  # Use first token
+    
+    # Extract and average concept embeddings
+    try:
+        concept_embeddings = text_embeddings[0, concept_indices, :]  # [num_concept_tokens, hidden_dim]
+        
+        # Average if multiple tokens
+        if len(concept_indices) > 1:
+            print(f"Averaged concept tokens: {[tokens[i] for i in concept_indices]} ({len(concept_indices)} tokens)")
+            return concept_embeddings.mean(dim=0)
+        else:
+            print(f"Extracted concept tokens: {[tokens[i] for i in concept_indices]} ({len(concept_indices)} tokens)")
+            return concept_embeddings[0]
+            
+    except Exception as e:
+        print(f"Error extracting concept embeddings: {e}")
+        print(f"  concept_indices: {concept_indices}")
+        print(f"  text_embeddings.shape: {text_embeddings.shape}")
+        return text_embeddings[0, 0, :]
+    
+def find_token_sequence(tokens, target_sequence):
+    """
+    Find the starting index of a token sequence in the full token list.
+    Returns None if not found.
+    """
+    if len(target_sequence) == 0:
+        return None
+        
+    # Normalize tokens for comparison (handle BPE markers, case, etc.)
+    tokens_clean = [t.lower().replace('##', '').replace('▁', '') for t in tokens]
+    target_clean = [t.lower().replace('##', '').replace('▁', '') for t in target_sequence]
+    
+    for i in range(len(tokens_clean) - len(target_clean) + 1):
+        if tokens_clean[i:i+len(target_clean)] == target_clean:
+            return i
+    
+    return None
 
 def remove_similar_embeddings(C, similarity_threshold=0.95):
     """
@@ -174,7 +316,7 @@ def remove_similar_embeddings(C, similarity_threshold=0.95):
     
     return C[:, keep_indices]
 
-def generate_gradient_projection_prompts(file_path, num_prompts, concept_type, previously_unlearned, target_concept_list):
+def generate_gradient_projection_prompts(file_path, num_prompts, concept_type, previously_unlearned, target_concept_list, dual_domain=True):
     """
     Generate anchor prompts using gpt and write to file_path.
     Args:
@@ -184,77 +326,99 @@ def generate_gradient_projection_prompts(file_path, num_prompts, concept_type, p
         previously_unlearned (list): List of previously unlearned concepts.
         target_concept_list (list): Current concepts to unlearn
     """
-
+    # Get openai API key from environment variable
     openai.api_key = os.getenv("OPENAI_API_KEY")
-        
-    prompt_collection = []
-    if "[" in previously_unlearned:
+    
+    # Create list of concepts to exclude from prompt generation
+    # Previously Unlearned Concepts (continual)
+    if previously_unlearned and "[" in previously_unlearned:
         previously_unlearned = ast.literal_eval(previously_unlearned)
     else:
-        previously_unlearned = [previously_unlearned]
-
+        previously_unlearned = [previously_unlearned] if previously_unlearned else []
+    # Concepts we're unlearning this training run
     for i in range(len(target_concept_list)):
         target_concept_list[i] = target_concept_list[i].replace(" Style", "")
         target_concept_list[i] = target_concept_list[i].replace("An image of ", "")
         print(f"Excluding for gradient projection prompts: '{target_concept_list[i]}'")
-    
-    if concept_type == "object":
+
+    # Generate style prompts
+    print(f"\n=== Generating Style Prompts ===")
+    style_prompts = []
+
+    # Add previously unlearned styles to prompt collection
+    if concept_type == "style":
         for concept in previously_unlearned:
-            prompt = f"An image of a {concept}"
-            print(f"Adding prompt: '{prompt}'")
-            prompt_collection.append(prompt)
-        messages = [
-            {"role": "system", "content": "You are an expert at generating creative image captions. You will generate random prompts in the format 'An image of a {object}', but the object must not contain but can be distantly related to the objects in '{target_concept_list}'."},
-            {"role": "user", "content": f'Generate {num_prompts} random prompts for images in the format "An image of a {{object}}". None of the objects should contain but can be distantly related to the words in "{target_concept_list}".'},
-        ]
-    elif concept_type == "style":
-        for concept in previously_unlearned:
+            if concept == "":
+                continue
             prompt = concept.replace("_", " ")
             prompt = f"An image in the style of {prompt}"
-            print(f"Adding prompt: '{prompt}'")
-            prompt_collection.append(prompt)
-        messages = [
-            {"role": "system", "content": "You are an expert at generating creative image captions. You will generate random prompts in the format 'An image in the style of {style}', but the style must not contain but can be distantly related to the words in '{target_concept_list}'. Remove unnecessary suffixes like 'style' or 'art'."},
-            {"role": "user", "content": f'Generate {num_prompts} random prompts for images in the format "An image in the style of {{style}}". None of the styles should contain but can be distantly related to the words in "{target_concept_list}".'},
-        ]
-    else:
-        raise ValueError(f"Unsupported concept type: '{concept_type}' for gradient projection prompt generation")
+            print(f"Adding previously unlearned concept to prompt: '{prompt}'")
+            style_prompts.append(prompt)
+        print(f"Added '{len(style_prompts)}' previously unlearned style prompts")
     
-    numtries = 1
-    while True:
-        print(f"{numtries}. Querying gpt for '{num_prompts - len(prompt_collection)}' prompts...")
-        outputs = openai.ChatCompletion.create(
-            model="gpt-4.1", messages=messages
-        ).choices[0].message.content.lower().split("\n")
-
-        prompt_collection += [
-            x
-            for x in outputs
-            if all(concept.lower() not in x.lower() for concept in target_concept_list) and x.strip() != ''
-        ]
-        messages.append(
-            {"role": "assistant", "content": outputs}
-        )
-        messages.append(
-            {
-                "role": "user",
-                "content": f"Generate {num_prompts-len(prompt_collection)} more captions",
-            }
-        )
-        messages = messages[min(len(messages),-10):]
-        numtries +=1
-        if len(prompt_collection) >= num_prompts or numtries > 10:
-            break
-
-    prompt_collection = clean_prompt(prompt_collection)[
-        :num_prompts
+    # Ensure gpt doesn't generate prompts that we plan on unlearning this training run
+    style_exclusions = target_concept_list if concept_type == "style" else []
+    style_messages = [
+        {"role": "system", "content": "You are an expert at generating creative image captions. You will generate random prompts in the format 'An image in the style of {style}'. Remove unnecessary suffixes like 'style' or 'art' from style names. You generate strictly formatted image captions without any commentary, explanations, or introductions. You just output the prompts, one per line."},
+        {"role": "user", "content": f'Generate {num_prompts} random prompts for images in the format "An image in the style of {{style}}". The styles should be diverse art styles, artist names, or artistic movements. None of the styles should contain the words: {style_exclusions}.' if style_exclusions else f'Generate {num_prompts} random prompts for images in the format "An image in the style of {{style}}". The styles should be diverse art styles, artist names, or artistic movements.'},
     ]
+    
+    if concept_type == "style" or dual_domain:
+        print(f"Style GPT Query: '{style_messages[1]['content']}'")
+        if dual_domain:
+            num_style_prompts = (num_prompts // 2) - len(style_prompts)
+        else:
+            num_style_prompts = num_prompts - len(style_prompts)
+        style_prompts.extend(generate_prompts_with_gpt(style_messages, num_style_prompts, style_exclusions))
+    else:
+        print(f"Skipping style prompt generation for concept type '{concept_type}'")
+    
+    # Generate object prompts  
+    print(f"\n=== Generating Object Prompts ===")
+    object_prompts = []
 
+    # Add previously unlearned objects to prompt collection
+    if concept_type == "object":
+        for concept in previously_unlearned:
+            if concept == "":
+                continue
+            prompt = f"An image of a {concept}"
+            print(f"Adding previously unlearned object prompt: '{prompt}'")
+            object_prompts.append(prompt)
+        print(f"Added '{len(object_prompts)}' previously unlearned object prompts")
+
+    # Ensure gpt doesn't generate prompts that we plan on unlearning this training run
+    object_exclusions = target_concept_list if concept_type == "object" else []
+    object_messages = [
+        {"role": "system", "content": "You are an expert at generating creative image captions. You will generate random prompts in the format 'An image of a {object}'. Focus on concrete, recognizable objects. You generate strictly formatted image captions without any commentary, explanations, or introductions. You just output the prompts, one per line."},
+        {"role": "user", "content": f'Generate {num_prompts} random prompts for images in the format "An image of a {{object}}". The objects should be diverse, concrete things like animals, vehicles, buildings, tools, etc. None of the objects should contain the words: {object_exclusions}.' if object_exclusions else f'Generate {num_prompts} random prompts for images in the format "An image of a {{object}}". The objects should be diverse, concrete things like animals, vehicles, buildings, tools, etc.'},
+    ]
+    if concept_type == "object" or dual_domain:
+        print(f"Object GPT Query: '{object_messages[1]['content']}'")
+        if dual_domain:
+            num_object_prompts = (num_prompts // 2) - len(object_prompts)
+        else:
+            num_object_prompts = num_prompts - len(object_prompts)
+        object_prompts.extend(generate_prompts_with_gpt(object_messages, num_object_prompts, object_exclusions))
+    else:
+        print(f"Skipping object prompt generation for concept type '{concept_type}'")
+        
+    # Combine all prompts
+    all_prompts = style_prompts + object_prompts
+    
+    # Clean prompts
+    all_prompts = clean_prompt(all_prompts)
+    
+    # Write to file
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
     with open(file_path, "w") as f:
-        for prompt in prompt_collection:
+        for prompt in all_prompts:
             f.write(prompt + "\n")
 
-    return prompt_collection
+    print(f"\nGenerated '{len(style_prompts)}' style prompts and '{len(object_prompts)}' object prompts")
+    print(f"Total: '{len(all_prompts)}' prompts saved to '{file_path}'")
+
+    return all_prompts
 
 def clean_prompt(class_prompt_collection):
     class_prompt_collection = [
@@ -268,3 +432,49 @@ def clean_prompt(class_prompt_collection):
     class_prompt_collection = [x.strip() for x in class_prompt_collection]
     class_prompt_collection = [x.replace('"', "") for x in class_prompt_collection]
     return class_prompt_collection
+
+def generate_prompts_with_gpt(messages, target_count, exclusions):
+    """Helper function to generate prompts using GPT with exclusion filtering"""
+    # Store prompts
+    prompt_collection = []
+
+    # Keep track of number of queries
+    numtries = 1
+    
+    while len(prompt_collection) < target_count and numtries <= 10:
+        # Print status
+        print(f"{numtries}. Querying GPT for '{target_count - len(prompt_collection)}' prompts...")
+        
+        try:
+            # Query GPT
+            response = openai.ChatCompletion.create(
+                model="gpt-4.1", messages=messages
+            )
+            outputs = response.choices[0].message.content.split("\n")
+            
+            # Filter out excluded concepts and empty lines
+            new_prompts = [
+                x.strip() for x in outputs
+                if (all(exclusion.lower() not in x.lower() for exclusion in exclusions) 
+                    and x.strip() != '' 
+                    and x.strip() not in prompt_collection)
+            ]
+            prompt_collection.extend(new_prompts)
+            
+            # Update conversation
+            messages.append({"role": "assistant", "content": response.choices[0].message.content})
+            messages.append({
+                "role": "user", 
+                "content": f"Generate {target_count - len(prompt_collection)} more captions in the same format"
+            })
+            
+            # Keep only recent messages to avoid context length issues
+            messages = messages[-10:]
+            
+        except Exception as e:
+            print(f"Error querying GPT: {e}")
+            break
+            
+        numtries += 1
+    
+    return prompt_collection[:target_count]

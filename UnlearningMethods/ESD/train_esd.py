@@ -34,6 +34,7 @@ from ContinualEnhancements.SelFT.selft_utils import (
 )
 ### Projection
 from ContinualEnhancements.Projection.gradient_projection import (
+    generate_gradient_projection_prompts,
     get_anchor_embeddings,
     apply_gradient_projection
 )    
@@ -54,7 +55,7 @@ if __name__ == '__main__':
     parser.add_argument('--image_size', help='Image resolution', type=int, required=False, default=512)
     
     # Training
-    parser.add_argument('--train_method', help='Parameters to update', type=str, required=True, choices=['xattn','noxattn', 'selfattn', 'full'])
+    parser.add_argument('--train_method', help='Parameters to update', type=str, required=True)
     parser.add_argument('--iterations', help='Number of iterations used to train', type=int, required=False, default=1000)
     parser.add_argument('--lr', help='Learning rate', type=str, required=False, default=None)
     parser.add_argument('--devices', help='CUDA devices used for loading frozen and esd unet', type=str, required=False, default='0,0')
@@ -72,6 +73,7 @@ if __name__ == '__main__':
     # Continual Enhancements
     ## Simultaneous
     parser.add_argument('--eval_every', type=int, default=None, help='Evaluate every n iterations')
+    parser.add_argument('--eval_start', type=int, default=0, help='Start evaluation from this iteration')
     parser.add_argument('--patience', type=int, default=2000, help='Patience for early stopping')
     parser.add_argument('--classifier_dir', type=str, required=False, help='Directory of classifier')
     
@@ -88,8 +90,10 @@ if __name__ == '__main__':
     
     ## Projection
     parser.add_argument('--with_gradient_projection', action='store_true', default=False, help='Use gradient projection wrt anchor embeddings')
-    parser.add_argument('--anchor_prompts_path', type=str, default=None, help='Path to anchor prompts txt for gradient projection')
-    
+    parser.add_argument('--gradient_projection_prompts', type=str, default=None, help='Path to anchor prompts txt for gradient projection')
+    parser.add_argument('--gradient_projection_num_prompts', type=int, default=400, help='Number of prompts to generate for gradient projection')
+    parser.add_argument('--previously_unlearned', type=str, default=None, help='Previously unlearned concepts to use for gradient projection')
+
     args = parser.parse_args()
     
     # Set seed for reproducibility
@@ -137,7 +141,11 @@ if __name__ == '__main__':
     if lr is None:
         # LR used in our paper
         if args.concept_type in ['style', 'celebrity']: lr = 1e-5
-        if args.concept_type in ['object']: lr = 5e-6
+        if args.concept_type in ['object']: 
+            if args.train_method in ["noxattn", "esd-u"]:
+                lr = 5e-6
+            elif args.train_method in ["kv-xattn", "xattn"]:
+                lr = 1e-5
         print(f"\nUsing default LR of '{lr}' for '{args.concept_type}' unlearning")
     else:
         lr = float(lr)
@@ -187,15 +195,29 @@ if __name__ == '__main__':
     
     # Projection
     if args.with_gradient_projection:
-        print(f"Using gradient projection to preserve anchor concepts.")
+        print(f"\nUsing gradient projection to preserve anchor concepts.")
         anchor_prompts = []
-        if os.path.isfile(args.anchor_prompts_path):
-            with open(args.anchor_prompts_path, 'r') as f:
-                prompts = [line.strip() for line in f.readlines() if line.strip()]
-            print(f"\tLoaded '{len(prompts)}' anchor prompts from '{args.anchor_prompts_path}'")
-            anchor_prompts.extend(prompts)
+
+        # Acquire text prompts for gradient projection
+        if args.gradient_projection_prompts:
+            if os.path.isfile(args.gradient_projection_prompts):
+                with open(args.gradient_projection_prompts, 'r') as f:
+                    prompts = [line.strip() for line in f.readlines() if line.strip()]
+                print(f"\tLoaded '{len(prompts)}' anchor prompts from '{args.gradient_projection_prompts}'")
+                anchor_prompts.extend(prompts)
+            else:
+                print(f"Generating gradient projection prompts and saving to file: '{args.gradient_projection_prompts}'")
+                anchor_prompts = generate_gradient_projection_prompts(
+                    file_path=args.gradient_projection_prompts,
+                    num_prompts=args.gradient_projection_num_prompts,
+                    concept_type=args.concept_type,
+                    previously_unlearned=args.previously_unlearned,
+                    target_concept_list=prompt_list.copy()
+                )
         else:
-            print(f"\tWarning - anchor prompts file '{args.anchor_prompts_path}' not found")
+            print(f"\tWarning - anchor prompts file '{args.gradient_projection_prompts}' not found")
+        
+        # Convert to text embeddings
         print(f"Total anchor prompts collected: '{len(anchor_prompts)}'")
         anchor_embeddings_matrix = get_anchor_embeddings(
             anchor_prompts, esd_pipeline.text_encoder, esd_pipeline.tokenizer, args.devices[0]
@@ -296,7 +318,7 @@ if __name__ == '__main__':
             
             # Simultaneous Early Stopping
             iteration+=1
-            if args.eval_every is not None and iteration % args.eval_every == 0:
+            if args.eval_every is not None and iteration % args.eval_every == 0 and iteration >= args.eval_start:
                 # Get estimated unlearned accuracy
                 esd_pipeline.unet.eval()
                 ua = sample_and_evaluate_ua(esd_pipeline, args.concept_type, iteration, save_path, prompt_list, 

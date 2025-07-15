@@ -250,6 +250,7 @@ def main(args):
 
             # Update logs
             logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0], "t": timesteps[0].item()}
+            logs["target[0]"] = f"'{batch['target_prompts'][0]}'"
             if args.with_prior_preservation:
                 logs["u_loss"] = unlearning_loss.item()
                 logs["r_loss"] = retention_loss.item()
@@ -294,9 +295,18 @@ def main(args):
                     ua, args.best_ua, args.no_improvement_count, args.eval_every, args.patience
                 )
                 
+                if args.stop_training:
+                    logger.info(f"Stopping training early at iteration {iteration} with best UA: {args.best_ua}")
+                    # Breaks out of inner for loop (batch)
+                    break
+
             # Check if we reached the maximum number of training steps
-            if global_step >= args.max_train_steps or (args.eval_every and args.stop_training):
+            if global_step >= args.max_train_steps:
                 break
+
+        if args.eval_every and args.stop_training:
+            # Breaks out of outer for loop (epoch)
+            break
         
         # Run validation step if enabled by args.turn_on_validation
         run_validation_step(

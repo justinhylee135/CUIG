@@ -220,6 +220,16 @@ def setup_training_configuration(args, unet, text_encoder, accelerator, logger, 
                 "xformers is not available. Make sure it is installed correctly"
             )
 
+    # if args.unet_ckpt:
+    #     if not os.path.exists(args.unet_ckpt):
+    #         print(f"UNet checkpoint not found at '{args.unet_ckpt}'. Using default UNet from pipeline '{args.base_model_dir}'...")
+    #     else:
+    #         print(f"Loading UNet checkpoint from '{args.unet_ckpt}'...")
+    #         ckpt_sd = torch.load(args.unet_ckpt, map_location="cpu", weights_only=False)
+    #         if "unet" in ckpt_sd: ckpt_sd = ckpt_sd["unet"]
+    #         missing, unexpected = unet.load_state_dict(ckpt_sd, strict=False)
+    #         print(f"Loaded '{len(ckpt_sd)}' keys from UNet checkpoint with '{len(missing)}' missing and '{len(unexpected)}' unexpected keys.")
+            
     # Enable gradient checkpointing if requested
     if args.gradient_checkpointing:
         print(f"Enabling gradient checkpointing...")
@@ -300,7 +310,6 @@ def setup_optimizer_and_params(args, unet, text_encoder, tokenizer):
         )
     else:
         # Set up parameters based on parameter group
-        print(f"Setting up UNet parameter group: '{args.parameter_group}'")
         if args.parameter_group == "cross-attn":
             params_to_optimize = itertools.chain(
                 [
@@ -319,6 +328,9 @@ def setup_optimizer_and_params(args, unet, text_encoder, tokenizer):
             )
         elif args.parameter_group == "full-weight":
             params_to_optimize = itertools.chain(unet.parameters())
+        params_to_optimize, params_copy = itertools.tee(params_to_optimize)
+        num_params = sum(1 for _ in params_copy)
+        print(f"UNet Parameter Group: '{args.parameter_group}' with '{num_params}' keys")
 
     # Create optimizer
     print(f"Creating optimizer with class '{optimizer_class.__name__}'")
@@ -388,9 +400,11 @@ def setup_continual_enhancement(args, unet, text_encoder, tokenizer, device):
                     num_prompts=args.gradient_projection_num_prompts,
                     concept_type=args.concept_type,
                     previously_unlearned=args.previously_unlearned,
-                    target_concept_list=args.prompt_list
+                    target_concept_list=args.prompt_list,
+                    dual_domain=(not args.gradient_projection_no_dual_domain)
                 )
         else:
+            print(f"\tCollecting anchor prompts from concepts_list...")
             for i, concept in enumerate(args.concepts_list):
                 class_prompt_file = concept["class_prompt"]
                 if os.path.isfile(class_prompt_file):
