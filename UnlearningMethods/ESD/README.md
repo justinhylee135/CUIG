@@ -63,7 +63,7 @@ Same arguments as continual but now we add the loss we want to use for one forwa
 python train_esd.py \
 --concept 'Abstractionism' \
 --concept_type 'style' \
---train_method 'xattn' \
+--train_method 'kv-xattn' \
 --save_path $OUTPUT_ROOT/esd/models/continual/selft/style/0.01/thruAbstractionism.pth \
 --base_model_dir $BASE_MODEL_DIR \
 --selft_loss 'esd' \
