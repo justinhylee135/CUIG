@@ -25,7 +25,10 @@ Use Conda to create and activate the project environment:
 ```bash
 conda env create -f env.yaml
 conda activate cuig
-export CUIG_ROOT=/your/save/dir/here
+export CUIG_ROOT=/your/repo/dir/here
+export OUTPUT_ROOT=/your/save/dir/here
+export BASE_MODEL_DIR=/your/base/model/dir/here
+export OPENAI_API_KEY=/your/openai/api/key/here
 ```
 
 ---

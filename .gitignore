@@ -6,3 +6,5 @@ cache
 cad_temp
 anchor_datasets
 notebook_output
+heatmap.ipynb
+plotting_results.ipynb

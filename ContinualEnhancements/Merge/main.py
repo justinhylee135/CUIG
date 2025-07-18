@@ -147,8 +147,16 @@ def main():
         raise ValueError(f"Unknown merge method: {args.merge_method}")
     
     # Save new merged state dictionary
-    torch.save(merged_state_dict, args.save_path)
-    print(f"Merged model saved to {args.save_path}")
+    if args.key_filter:
+        filtered_state_dict = {
+            k: v for k, v in merged_state_dict.items()
+            if any(f in k for f in args.key_filter)
+        }
+    else:
+        filtered_state_dict = merged_state_dict
+
+    torch.save(filtered_state_dict, args.save_path)
+    print(f"Merged state dictionary {len(filtered_state_dict)}/{len(merged_state_dict)} saved to {args.save_path} (filtered: {args.key_filter})")
 
 if __name__ == "__main__":
     main()

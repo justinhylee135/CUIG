@@ -49,7 +49,19 @@ def sample_and_evaluate_ua(pipeline, concept_type, iteration, model_save_path, p
         elif concept in object_available:
             object_available_subset.append(concept)
         else:
-            raise ValueError(f"Concept '{concept}' not found in available themes or classes.")    
+            match_found = False
+            for theme in theme_available:
+                if concept in theme.lower():
+                    theme_available_subset.append(theme)
+                    match_found = True
+                    break
+            for obj in object_available:
+                if concept in obj.lower():
+                    object_available_subset.append(obj)
+                    match_found = True
+                    break
+            if not match_found:
+                raise ValueError(f"Concept '{concept}' not found in available themes or classes.")    
     unlearn_subset = object_available_subset + theme_available_subset
     print(f"Unlearn Subset: {unlearn_subset}")
     
@@ -92,6 +104,7 @@ def sample_and_evaluate_ua(pipeline, concept_type, iteration, model_save_path, p
                         continue
                     
                     prompt = f"A {object_class} image in {test_theme.replace('_', ' ')} style."
+                    pbar.set_postfix({"prompt": f"'{prompt}'"})
                     image = pipeline(prompt=prompt, width=W, height=H, num_inference_steps=steps, guidance_scale=cfg_text).images[0]
                     image.save(img_save_path)
                     pbar.update(1)

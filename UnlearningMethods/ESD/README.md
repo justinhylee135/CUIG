@@ -18,37 +18,24 @@ cd $REPO_ROOT/UnlearningMethods/ESD
 python train_esd.py \
 --concept 'Abstractionism' \
 --concept_type 'style' \
---train_method 'xattn' \
+--train_method 'kv-xattn' \
 --save_path $OUTPUT_ROOT/esd/models/independent/base/style/Abstractionism.pth \
 --base_model_dir $BASE_MODEL_DIR 
 ```
-```bash
-python train_esd.py \
---concept 'Abstractionism' \
---concept_type 'style' \
---train_method 'kv-xattn' \
---save_path $OUTPUT_ROOT/esd/models/continual/projection/gradient_projection/style/thruAbstractionism.pth \
---base_model_dir $BASE_MODEL_DIR \
---with_gradient_projection \
---gradient_projection_prompts $OUTPUT_ROOT/esd/models/continual/projection/gradient_projection/style/thruAbstractionism_prompts.txt
-```
 #### Object
 ```bash
-python -m debugpy --listen 10.6.8.8:5678 --wait-for-client \
 python train_esd.py \
 --concept 'Bears' \
 --concept_type 'object' \
---train_method 'esd-u' \
+--train_method 'kv-xattn' \
 --save_path $OUTPUT_ROOT/esd/models/independent/base/object/Bears_test.pth \
 --base_model_dir $BASE_MODEL_DIR \
---overwrite_existing_ckpt 
+--start_guidance 9.0 \
+--negative_guidance 9.0
 ```
-#### Celebrity
 
 ### Continual
-#### Style
-#### Object
-#### Celebrity
+Use the same arguments as independent but now add "--unet_ckpt" with the pass to your previous unlearned models .pth
 
 ### Simultaneous
 #### Style
@@ -56,40 +43,21 @@ python train_esd.py \
 python train_esd.py \
 --concept '["Abstractionism", "Byzantine", "Cartoon"]' \
 --concept_type 'style' \
---train_method 'xattn' \
+--train_method 'kv-xattn' \
 --save_path $OUTPUT_ROOT/esd/models/simultaneous/base/style/thruCartoon/thruCartoon.pth \
 --base_model_dir $BASE_MODEL_DIR \
 --eval_every 100 \
 --classifier_dir $REPO_ROOT/Evaluation/UnlearnCanvas/classifiers
 ```
-#### Object
-#### Celebrity
 
 ### Regularization: L1
-#### Style
-```bash
-python train_esd.py \
---concept 'Abstractionism' \
---concept_type 'style' \
---train_method 'xattn' \
---save_path $OUTPUT_ROOT/esd/models/continual/l1sp/style/100/thruAbstractionism.pth \
---base_model_dir $BASE_MODEL_DIR \
---l1sp_weight 100
-```
+Same arguments as continual with with "--l1sp_weight" and add the scaling factor for l1sp. Good starting values are [1,100]
 
 ### Regularization: L2
-#### Style
-```bash
-python train_esd.py \
---concept 'Abstractionism' \
---concept_type 'style' \
---train_method 'xattn' \
---save_path $OUTPUT_ROOT/esd/models/continual/l1sp/style/300000/thruAbstractionism.pth \
---base_model_dir $BASE_MODEL_DIR \
---l1sp_weight 300000
-```
+Same arguments as continual with with "--l2sp_weight" and add the scaling factor for l2sp. Good starting values are [10000,300000]
 
 ### Selective Finetuning (SelFT)
+Same arguments as continual but now we add the loss we want to use for one forward pass "selft_loss". The number of parameters to update "selft_topk" and where to save our gradient dictionary "selft_grad_dict_path"
 #### Style
 ```bash
 python train_esd.py \
@@ -101,6 +69,21 @@ python train_esd.py \
 --selft_loss 'esd' \
 --selft_topk 0.01 \
 --selft_grad_dict_path $OUTPUT_ROOT/esd/models/continual/selft/style/0.01/thruAbstractionism_grad_dict.pth
+```
+
+### Gradient Projection
+Same arguments as continual but now we add the flag "with_gradient_projection" and the prompts we want to build the text embedding subspace with or where to save the generated ones at "gradient_projection_prompts". The example below shows the first unlearning step, to unlearn the next one and preserve previous unlearning, add the previous unlearned concepts as a list to "--previously_unlearned".
+#### Style
+```bash
+python train_esd.py \
+--concept 'Abstractionism' \
+--concept_type 'style' \
+--train_method 'kv-xattn' \
+--save_path $OUTPUT_ROOT/esd/models/continual/projection/gradient_projection/style/thruAbstractionism.pth \
+--base_model_dir $BASE_MODEL_DIR \
+--with_gradient_projection 
+--gradient_projection_prompts $OUTPUT_ROOT/esd/models/continual/projection/gradient_projection/style/thruAbstractionism_prompts.txt
+
 ```
 
 ---
