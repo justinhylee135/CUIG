@@ -46,6 +46,15 @@ from ContinualEnhancements.Simultaneous.sim_utils import sample_and_evaluate_ua,
 ### Regularization
 from ContinualEnhancements.Regularization.l1sp import calculate_l1sp_loss
 from ContinualEnhancements.Regularization.l2sp import calculate_l2sp_loss
+from ContinualEnhancements.Regularization.inverse_ewc import (  
+    accumulate_fisher,
+    calculate_inverse_ewc_loss,
+    save_fisher_information
+)
+from ContinualEnhancements.Regularization.trajectory import (
+    calculate_trajectory_loss,
+    save_delta_to_path
+)
 ### SelFT Imports Used in utils.py
 ### Projection
 from ContinualEnhancements.Projection.gradient_projection import (
@@ -147,7 +156,6 @@ def main(args):
                 emb_target_and_anchor = text_encoder(token_target_and_anchor)[0]
                 emb_anchor = text_encoder(token_anchor)[0]
 
-
                 # Predict the noise residual
                 pnoise_target_and_anchor = unet(noisy_anchor_latents, timesteps, emb_target_and_anchor).sample
                 
@@ -205,17 +213,40 @@ def main(args):
                     loss = ((loss * mask).sum([1, 2, 3]) / mask.sum([1, 2, 3])).mean()
 
                 # Regularizers
+                ca_loss = loss.detach().clone()
                 l1sp_loss = None
                 l2sp_loss = None
+                inverse_ewc_loss = None
+                trajectory_loss = None
                 if args.l1sp_weight > 0.0:
                     l1sp_loss = args.l1sp_weight * calculate_l1sp_loss(unet, args.original_params)
                     loss += l1sp_loss
                 if args.l2sp_weight > 0.0:
                     l2sp_loss = args.l2sp_weight * calculate_l2sp_loss(unet, args.original_params)
                     loss += l2sp_loss
-
+                if args.inverse_ewc_lambda > 0.0 and args.previous_aggregated_fisher is not None:
+                    inverse_ewc_loss = args.inverse_ewc_lambda * calculate_inverse_ewc_loss(
+                        unet, 
+                        args.previous_aggregated_fisher, 
+                        args.original_params, 
+                        accelerator.device,
+                        use_l2=args.inverse_ewc_use_l2
+                    )
+                    loss += inverse_ewc_loss
+                if args.trajectory_lambda > 0.0 and args.previous_aggregated_delta is not None:
+                    trajectory_loss = args.trajectory_lambda * calculate_trajectory_loss(
+                        unet,
+                        args.previous_aggregated_delta,
+                        args.original_params,
+                        accelerator.device
+                    )
+                    loss += trajectory_loss
                 # Compute gradients
                 accelerator.backward(loss)
+                
+                # Accumulate Fisher for this unlearning run (only used next unlearning run)
+                if args.save_fisher_path is not None:
+                    args.current_fisher = accumulate_fisher(unet, args.current_fisher)
                 
                 # Make gradient orthogonal to text embedding space of anchor concepts
                 if args.with_gradient_projection:
@@ -249,13 +280,17 @@ def main(args):
             )
 
             # Update logs
-            logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0], "t": timesteps[0].item()}
-            logs["target[0]"] = f"'{batch['target_prompts'][0]}'"
+            logs = {"total_loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0], "t": timesteps[0].item()}
+            logs["targets[0]"] = f"'{batch['target_prompts'][0]}'"
+            if args.concept_type=="object": logs["anchors[0]"] = f"'{batch['anchors'][0]}'"
             if args.with_prior_preservation:
                 logs["u_loss"] = unlearning_loss.item()
                 logs["r_loss"] = retention_loss.item()
             if l1sp_loss is not None: logs["l1_loss"] = l1sp_loss.item()
             if l2sp_loss is not None: logs["l2_loss"] = l2sp_loss.item()
+            if inverse_ewc_loss is not None: logs["ewc_loss"] = inverse_ewc_loss.item()
+            if trajectory_loss is not None: logs["trajectory_loss"] = trajectory_loss.item()
+            if len(logs) > 4: logs["ca_loss"] = ca_loss.item()
             progress_bar.set_postfix(**logs)
             accelerator.log(logs, step=global_step)
             iteration += 1
@@ -340,7 +375,15 @@ def main(args):
         # Upload to hub if requested
         if args.push_to_hub and repo_id:
             upload_to_hub(args, repo_id, images)
-            
+        
+        # Save Fisher Information
+        if args.save_fisher_path is not None and args.current_fisher:
+            save_fisher_information(args.current_fisher, args.save_fisher_path, iteration, args.previous_aggregated_fisher)
+        
+        # Save delta
+        if args.save_delta_path is not None:
+            save_delta_to_path(unet, args.original_params, args.save_delta_path, args.previous_aggregated_delta)
+
     accelerator.end_training()
 
 

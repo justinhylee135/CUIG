@@ -13,7 +13,7 @@ from tqdm import tqdm
 from torchvision import transforms
 import timm
 
-def sample_and_evaluate_ua(pipeline, concept_type, iteration, model_save_path, prompt_list, prompt, device, classifier_dir):
+def sample_and_evaluate_ua(pipeline, concept_type, iteration, model_save_path, prompt_list, current_prompt, device, classifier_dir):
     # Lists of available theme and classes
     theme_available=["Abstractionism", "Artist_Sketch", "Blossom_Season", "Bricks", "Byzantine", "Cartoon",
                     "Cold_Warm", "Color_Fantasy", "Comic_Etch", "Crayon", "Cubism", "Dadaism", "Dapple",
@@ -326,7 +326,7 @@ def sample_and_evaluate_ua(pipeline, concept_type, iteration, model_save_path, p
     # Return the average unlearn accuracy
     return round(unlearn_accuracy_avg, 2)
 
-def check_early_stopping(ua, best_ua, no_improvement_count, eval_every, patience):
+def check_early_stopping(ua, best_ua, no_improvement_count, eval_every, patience, stop_threshold=99.0):
     """ Check if early stopping conditions are met """
     # Update best UA 
     if ua > best_ua:
@@ -340,10 +340,10 @@ def check_early_stopping(ua, best_ua, no_improvement_count, eval_every, patience
     # Check stopping conditions
     stop_training = False
     if no_improvement_count >= patience:
-        print(f"Early stopping triggered after {no_improvement_count} iterations without improvement.")
+        print(f"Early stopping triggered after '{no_improvement_count}' iterations without improvement.")
         stop_training = True
-    if ua >= 99.0:
-        print(f"Sample unlearned accuracy reached 99%. Stopping training.")
+    if ua >= stop_threshold:
+        print(f"Sample unlearned accuracy reached stop threshold '{stop_threshold}%'. Stopping training.")
         stop_training = True
     
     return best_ua, no_improvement_count, stop_training

@@ -63,18 +63,60 @@ def apply_gradient_projection(model, filtered_embedding_matrix, device, accelera
     # Get model with gradients
     model_to_process = accelerator.unwrap_model(model) if accelerator else model
 
+    # Build name->parameter dict once (for pairing lora_up/lora_down)
+    name_to_param = dict(model_to_process.named_parameters())
+    processed_lora = set()  # to avoid double-processing of the same lora pair
+
     # Iterate through all K and V weights in cross-attention layers    
     for name, param in model_to_process.named_parameters():
         if (param.grad is not None and 
             'attn2' in name and 
             ('to_k' in name or 'to_v' in name)):
             
+            # LoRA processing
+            if "lora_layer" in name and param.grad.shape[1] != embedding_dim:
+                if not name.endswith(".lora_layer.down.weight"):
+                    continue  # Process only down weights (We'll find up weights in the same loop)
+                
+                prefix = name.rsplit(".lora_layer.down.weight", 1)[0]
+                if prefix in processed_lora:
+                    continue  # Already processed this LoRA pair
+                processed_lora.add(prefix)
+                
+                A_name = prefix + ".lora_layer.up.weight"
+                B_name = prefix + ".lora_layer.down.weight"
+                A = name_to_param.get(A_name, None)
+                B = name_to_param.get(B_name, None)
+                if A is None or B is None or A.grad is None or B.grad is None:
+                    print(f"Warning: Could not find LoRA pair for {name}, skipping projection")
+                    continue
+                
+                # Reconstruct Geff (d_out x d_in), project on input space, then decompose back
+                scale = 1.0
+                Geff = _reconstruct_Geff_from_lora(A.data, B.data, A.grad.data.to(C.dtype), B.grad.data.to(C.dtype), reg=1e-4, scale=scale)
+                if Geff is None or Geff.shape[1] != embedding_dim:
+                    print(f"Warning: Could not reconstruct Geff for {name}, defaulting to down matrix projection")
+                    gB = B.grad
+                    if gB.ndim == 2 and gB.shape[1] == embedding_dim:
+                        B.grad.data = (gB.to(P.dtype) @ P).to(gB.dtype)
+                    continue
+                
+                Geff_proj = (Geff @ P) # right projection in text dimension
+                gA_new, gB_new = _decompose_Geff_to_lora_grads(Geff_proj.to(A.grad.dtype), A.data, B.data, scale=scale)
+                
+                # Write back new grads
+                A.grad.data = gA_new.to(A.grad.dtype)
+                B.grad.data = gB_new.to(B.grad.dtype)
+                
+                # Done for this LoRA pair
+                continue
+                
+            # Original projection behavior (Non-LoRA)
             original_shape = param.grad.shape
-            
             if len(original_shape) == 2:
                 # Standard linear layer: [out_features, in_features]
                 grad_matrix = param.grad  # [out_features, in_features]
-                projected_grad = grad_matrix @ P  # Project along input dimension
+                projected_grad = grad_matrix @ P  # Project along input dimension               
                 param.grad.data = projected_grad
             elif len(original_shape) == 1:
                 # Skip bias terms - no projection needed
@@ -85,6 +127,36 @@ def apply_gradient_projection(model, filtered_embedding_matrix, device, accelera
                 projected_grad = grad_reshaped @ P
                 param.grad.data = projected_grad.view(original_shape)
 
+# --- Minimal helpers for LoRA ΔW reconstruction/decomposition ---
+def _reconstruct_Geff_from_lora(A, B, gA, gB, reg=1e-4, scale=1.0):
+    """
+    Reconstruct an estimate of full-space grad Geff (d_out x d_in) for ΔW = scale * A @ B
+    using small rxr solves; combine two estimates for stability.
+    """
+    d_out, r = A.shape
+    r2, d_in = B.shape
+    if r != r2:
+        return None
+
+    # (1) From gA = scale * Geff * B^T  => Geff ≈ (1/scale) * gA @ (B^T)^+
+    # Use (B^T)^+ = (B B^T + λI)^(-1) @ B
+    BBt = (B @ B.T) + reg * torch.eye(r, device=B.device, dtype=B.dtype)  # (r, r)
+    gA_small = gA @ torch.linalg.solve(BBt, torch.eye(r, device=B.device, dtype=B.dtype))  # (d_out, r)
+    Geff_a = (gA_small @ B) / max(scale, 1e-12)  # (d_out, d_in)
+
+    # (2) From gB = scale * A^T * Geff  => Geff ≈ (1/scale) * (A^T)^+ @ gB
+    # Use (A^T)^+ = A @ (A^T A + λI)^(-1)
+    AtA = (A.T @ A) + reg * torch.eye(r, device=A.device, dtype=A.dtype)  # (r, r)
+    Geff_b = (A @ torch.linalg.solve(AtA, torch.eye(r, device=A.device, dtype=A.dtype)) @ gB) / max(scale, 1e-12)
+
+    return 0.5 * (Geff_a + Geff_b)
+
+def _decompose_Geff_to_lora_grads(Geff_proj, A, B, scale=1.0):
+    """Map projected full-space grad back to LoRA grads."""
+    gA_new = scale * (Geff_proj @ B.T)   # (d_out, r)
+    gB_new = scale * (A.T @ Geff_proj)   # (r, d_in)
+    return gA_new, gB_new
+    
 def get_anchor_embeddings(anchor_prompts, text_encoder, tokenizer, device):
     """
     Encode anchor prompts into text embeddings, extracting concept tokens after format prefixes.
@@ -141,7 +213,7 @@ def get_anchor_embeddings(anchor_prompts, text_encoder, tokenizer, device):
     else:
         raise ValueError("No anchor prompts provided for encoding.")
 
-def extract_concept_tokens_after_prefix(text_embeddings, text_inputs, tokenizer):
+def extract_concept_tokens_after_prefix(text_embeddings, text_inputs, tokenizer, verbose=False):
     """
     Extract embeddings for tokens after format prefixes and average them if multiple.
     
@@ -251,10 +323,10 @@ def extract_concept_tokens_after_prefix(text_embeddings, text_inputs, tokenizer)
         
         # Average if multiple tokens
         if len(concept_indices) > 1:
-            print(f"Averaged concept tokens: {[tokens[i] for i in concept_indices]} ({len(concept_indices)} tokens)")
+            if verbose: print(f"Averaged concept tokens: {[tokens[i] for i in concept_indices]} ({len(concept_indices)} tokens)")
             return concept_embeddings.mean(dim=0)
         else:
-            print(f"Extracted concept tokens: {[tokens[i] for i in concept_indices]} ({len(concept_indices)} tokens)")
+            if verbose: print(f"Extracted concept tokens: {[tokens[i] for i in concept_indices]} ({len(concept_indices)} tokens)")
             return concept_embeddings[0]
             
     except Exception as e:
@@ -335,7 +407,13 @@ def generate_gradient_projection_prompts(file_path, num_prompts, concept_type, p
         previously_unlearned = ast.literal_eval(previously_unlearned)
     else:
         previously_unlearned = [previously_unlearned] if previously_unlearned else []
+        
     # Concepts we're unlearning this training run
+    no_duplicates = list(dict.fromkeys(target_concept_list))
+    if len(no_duplicates) < len(target_concept_list):
+        print(f"Removed {len(target_concept_list) - len(no_duplicates)} duplicate concepts from '{target_concept_list}' to '{no_duplicates}'")
+        target_concept_list = no_duplicates
+
     for i in range(len(target_concept_list)):
         target_concept_list[i] = target_concept_list[i].replace(" Style", "")
         target_concept_list[i] = target_concept_list[i].replace("An image of ", "")

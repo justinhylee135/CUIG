@@ -321,7 +321,9 @@ def selft_get_score(unet, prompt_list, anchor, loss, device, text_encoder, token
 def process_anchor(anchor, prompt_list):
     """Process anchor to ensure it matches the prompt list length"""
     # Anchor list can be a single anchor or a list of anchors
-    if "[" in anchor:
+    if isinstance(anchor, list):
+        anchor_list = anchor
+    elif "[" in anchor:
         anchor_list = ast.literal_eval(anchor)
     else:
         anchor_list = [anchor]

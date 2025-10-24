@@ -28,6 +28,14 @@ from src.model import CustomDiffusionPipeline, freeze_params, save_model_card
 ## Continual Enhancements
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 sys.path.append(project_root)
+### Regularization
+from ContinualEnhancements.Regularization.inverse_ewc import (  
+    load_fisher_information,
+)
+from ContinualEnhancements.Regularization.trajectory import (
+    load_delta_from_path,
+    save_delta_to_path
+)
 ### SelFT
 from ContinualEnhancements.SelFT.selft_utils import (
     get_selft_mask_dict,
@@ -121,10 +129,20 @@ def setup_concepts_list(args):
         num_concepts = len(args.caption_target)
         if "[" in args.class_data_dir:
             args.class_data_dir = ast.literal_eval(args.class_data_dir)
+            # Check for mismatch in number of datasets
+            num_datasets = len(args.class_data_dir)
+            if num_datasets < num_concepts and num_concepts % num_datasets == 0:
+                print(f"Only '{num_datasets}' datasets were provided for '{num_concepts}' concepts. Broadcasting '{num_concepts // num_datasets}' times...")
+                args.class_data_dir = args.class_data_dir * (num_concepts // num_datasets)
         else:
             args.class_data_dir = [args.class_data_dir] * num_concepts
         if "[" in args.class_prompt:
             args.class_prompt = ast.literal_eval(args.class_prompt)
+            # Check for mismatch in number of prompts
+            num_prompts = len(args.class_prompt)
+            if num_prompts < num_concepts and num_concepts % num_prompts == 0:
+                print(f"Only '{num_prompts}' prompts were provided for '{num_concepts}' concepts. Broadcasting '{num_concepts // num_prompts}' times...")
+                args.class_prompt = args.class_prompt * (num_concepts // num_prompts)
         else:
             args.class_prompt = [args.class_prompt] * num_concepts
     else:
@@ -333,7 +351,8 @@ def setup_optimizer_and_params(args, unet, text_encoder, tokenizer):
         print(f"UNet Parameter Group: '{args.parameter_group}' with '{num_params}' keys")
 
     # Create optimizer
-    print(f"Creating optimizer with class '{optimizer_class.__name__}'")
+    print(f"Initializing training configurations...")
+    print(f"\tCreating optimizer with class '{optimizer_class.__name__}'")
     optimizer = optimizer_class(
         params_to_optimize,
         lr=args.learning_rate,
@@ -348,31 +367,68 @@ def setup_continual_enhancement(args, unet, text_encoder, tokenizer, device):
     """
     Set up continual enhancement components.
     """
+    print(f"Setting up Continual Enhancements...")
     # Continual Enhancements
     ## Retention Loss
     if args.with_prior_preservation: 
-        print(f"Using retention loss with weight '{args.prior_loss_weight}'")
+        print(f"\tUsing retention loss with weight '{args.prior_loss_weight}'")
     else:
-        print("Not using retention loss, only unlearning loss will be computed.")
+        print("\tNot using retention loss, only unlearning loss will be computed.")
 
     ## Simultaneous Unlearning (Early Stopping)
     if args.eval_every is not None:
         if args.classifier_dir is None: raise ValueError("Classifier directory must be specified for early stopping evaluation.")
-        print(f"Using early stopping with patience '{args.patience}' and eval_every '{args.eval_every}' instead of '{args.max_train_steps}' iterations")
+        print(f"\tUsing early stopping with patience '{args.patience}' and eval_every '{args.eval_every}' instead of '{args.max_train_steps}' iterations")
         args.best_ua = 0.0
         args.no_improvement_count = 0
         args.stop_training = False
 
     ## Regularization    
-    args.original_params = {}
-    if args.l1sp_weight > 0.0: print(f"Using L1SP regularizer with weight '{args.l1sp_weight}'")
-    if args.l2sp_weight > 0.0: print(f"Using L2SP regularizer with weight '{args.l2sp_weight}'")
+    if args.set_original_params_to_base:
+        print(f"\targs.original_params have already been initialized to the base model")
+    else:
+        args.original_params = {}
+    if args.l1sp_weight > 0.0: print(f"\tUsing L1SP regularizer with weight '{args.l1sp_weight}'")
+    if args.l2sp_weight > 0.0: print(f"\tUsing L2SP regularizer with weight '{args.l2sp_weight}'")
+    ## Inverse EWC
+    args.current_fisher = {}
+    args.previous_aggregated_fisher = None
+    if args.inverse_ewc_lambda > 0.0:
+        print(f"\tUsing Inverse EWC regularizer with lambda '{args.inverse_ewc_lambda}'")
+        
+        # Choose parameter difference metric
+        if args.inverse_ewc_use_l2:
+            print(f"\t\tUsing L2 distance for Inverse EWC loss")
+        else:
+            print(f"\t\tUsing L1 distance for Inverse EWC loss")
+        
+        # Load previous fisher information
+        if args.previous_fisher_path is not None and os.path.exists(args.previous_fisher_path):
+            print(f"\t\tLoading previous fisher information from '{args.previous_fisher_path}'")
+            args.previous_aggregated_fisher = load_fisher_information(args.previous_fisher_path, device)
+        else:
+            args.inverse_ewc_lambda = 0.0
+            print(f"\t\tNo previous fisher information found. Turning off Inverse EWC regularization...")
+        
+        if args.save_fisher_path is not None:
+            print(f"\t\tWill accumulate fisher information during unlearning and save to '{args.save_fisher_path}'")
+    ## Trajectory Regularization
+    args.previous_aggregated_delta = None
+    if args.trajectory_lambda > 0.0:
+        print(f"\tUsing Trajectory regularizer with lambda '{args.trajectory_lambda}'")
+
+        if args.previous_delta_path is not None and os.path.exists(args.previous_delta_path):
+            print(f"\t\tLoading previous parameter deltas from '{args.previous_delta_path}'")
+            args.previous_aggregated_delta = load_delta_from_path(args.previous_delta_path, device)
+        else:
+            print(f"\t\tNo previous parameter deltas found. Turning off Trajectory regularization...")
+            args.trajectory_lambda = 0.0
     ## SelFT
     selft_device = "cuda:0" if torch.cuda.is_available() else "cpu"
     selft_mask_dict = None
     grad_hooks = []
     if args.selft_loss is not None:
-        print(f"Using SelFT with loss type: '{args.selft_loss}', top-k: '{args.selft_topk}'")
+        print(f"\tUsing SelFT with loss type: '{args.selft_loss}', top-k: '{args.selft_topk}'")
         # Generate or load SelFT masks (would need to adapt for diffusers UNet)
         unet.eval()
         selft_mask_dict = get_selft_mask_dict(
@@ -383,18 +439,18 @@ def setup_continual_enhancement(args, unet, text_encoder, tokenizer, device):
         )
         # Apply SelFT masks via gradient hooks
         grad_hooks = apply_selft_masks(unet, selft_mask_dict)
-        print(f"Applied SelFT masks with '{len(grad_hooks)}' hooks")
+        print(f"\t\tApplied SelFT masks with '{len(grad_hooks)}' hooks")
     ## Gradient Projection
     if args.with_gradient_projection:
-        print(f"Using gradient projection to preserve anchor concepts.")
+        print(f"\tUsing gradient projection to preserve anchor concepts.")
         args.anchor_prompts = []
         if args.gradient_projection_prompts:
             if os.path.isfile(args.gradient_projection_prompts):
-                print(f"Loading anchor prompts from file: '{args.gradient_projection_prompts}'")
+                print(f"\t\tLoading anchor prompts from file: '{args.gradient_projection_prompts}'")
                 with open(args.gradient_projection_prompts, 'r') as f:
                     args.anchor_prompts = [line.strip() for line in f.readlines() if line.strip()]
             else:
-                print(f"Generating gradient projection prompts and saving to file: '{args.gradient_projection_prompts}'")
+                print(f"\t\tGenerating gradient projection prompts and saving to file: '{args.gradient_projection_prompts}'")
                 args.anchor_prompts = generate_gradient_projection_prompts(
                     file_path=args.gradient_projection_prompts,
                     num_prompts=args.gradient_projection_num_prompts,
@@ -404,17 +460,17 @@ def setup_continual_enhancement(args, unet, text_encoder, tokenizer, device):
                     dual_domain=(not args.gradient_projection_no_dual_domain)
                 )
         else:
-            print(f"\tCollecting anchor prompts from concepts_list...")
+            print(f"\t\tCollecting anchor prompts from concepts_list...")
             for i, concept in enumerate(args.concepts_list):
                 class_prompt_file = concept["class_prompt"]
                 if os.path.isfile(class_prompt_file):
                     with open(class_prompt_file, 'r') as f:
                         prompts = [line.strip() for line in f.readlines() if line.strip()]
-                    print(f"\tConcept {i+1}: Loaded '{len(prompts)}' anchor prompts from '{class_prompt_file}'")
+                    print(f"\t\t\tConcept {i+1}: Loaded '{len(prompts)}' anchor prompts from '{class_prompt_file}'")
                     args.anchor_prompts.extend(prompts)
                 else:
-                    print(f"\tConcept {i+1}: Warning - class_prompt file '{class_prompt_file}' not found")
-        print(f"Total anchor prompts collected: '{len(args.anchor_prompts)}'")
+                    print(f"\t\t\tConcept {i+1}: Warning - class_prompt file '{class_prompt_file}' not found")
+        print(f"\t\tTotal anchor prompts collected: '{len(args.anchor_prompts)}'")
         args.anchor_embeddings_matrix = get_anchor_embeddings(
             args.anchor_prompts, text_encoder, tokenizer, device
         )

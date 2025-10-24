@@ -1,0 +1,128 @@
+MACE:
+  # >>> primary settings >>>
+  multi_concept:
+  - [
+    ['Abstractionism', 'style'],
+  ]
+  use_pooler: true  
+  train_batch_size: 1
+  learning_rate: 1.0e-05
+  max_train_steps: 50
+  train_preserve_scale: 0.0
+  fuse_preserve_scale: 0.0
+  mapping_concept: 
+    - 'Photo Style'
+  augment: true
+  lamb: 1.0e+1 # Set to 1.0e+1 for object
+  rank: 1
+  lora: true
+  train_seperate: true
+  importance_sampling: true
+
+  max_memory: 1000
+  aug_length: 30
+  prompt_len: 30
+  all_words: false
+  generate_data: true
+  use_gpt: false
+  test_erased_model: false
+
+  prior_preservation_cache_path: false
+  domain_preservation_cache_path: false
+  preserve_weight: 0.0
+  input_data_dir: ./data/style
+  output_dir: ./saved_model/CFR_with_multi_LoRAs
+  final_save_path: ./saved_model/LoRA_fusion_model
+  unet_ckpt: null
+
+  ## gounded_SAM settings
+  use_gsam_mask: false
+  use_sam_hq: false
+  grounded_config: ./Grounded-Segment-Anything/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py
+  grounded_checkpoint: ./Grounded-Segment-Anything/groundingdino_swint_ogc.pth
+  sam_hq_checkpoint: ./Grounded-Segment-Anything/sam_hq_vit_h.pth
+  
+  # pretrained_model_name_or_path: stabilityai/stable-diffusion-2-1-base
+  pretrained_model_name_or_path: /users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/base_models/UnlearnCanvas
+  with_prior_preservation: false
+  prior_loss_weight: 1.0
+  preserve_prompt: a person
+  preserve_data_dir: data/a person
+  
+  with_uncond_loss: false
+  negative_guidance: 1.0
+  uncond_loss_weight: 1.0
+  num_class_images: 200
+  seed: 2024
+  resolution: 512
+  revision: null
+  tokenizer_name: null
+  instance_prompt: null
+  concept_keyword: null
+  no_real_image: false
+  center_crop: false
+  train_text_encoder: false
+  sample_batch_size: 4
+  num_train_epochs: 1
+  checkpointing_steps: 500
+  resume_from_checkpoint: null
+  gradient_accumulation_steps: 1
+  gradient_checkpointing: false
+  scale_lr: false
+  lr_scheduler: constant
+  lr_warmup_steps: 0
+  lr_num_cycles: 1
+  lr_power: 1.0
+  use_8bit_adam: false
+  dataloader_num_workers: 0
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  adam_weight_decay: 0.01
+  adam_epsilon: 1.0e-08
+  max_grad_norm: 1.
+  push_to_hub: false
+  hub_token: null
+  hub_model_id: null
+  logging_dir: logs
+  allow_tf32: false
+  report_to: tensorboard
+  mixed_precision: null
+  prior_generation_precision: null
+  local_rank: -1
+  enable_xformers_memory_efficient_attention: false
+  set_grads_to_none: false
+  
+  # Custom Continual Enhancements Arguments
+  # Simultaneous
+  eval_every: null                # Evaluate every n iterations
+  patience: 2000                  # Patience for early stopping
+  classifier_dir: null            # Directory of classifier
+
+  # Regularization
+  l2sp_weight: 0.0                # Weight for L2SP regularizer
+  l1sp_weight: 0.0                # Weight for L1SP regularizer
+
+  # Inverse EWC
+  inverse_ewc_lambda: 0.0         # Lambda weight for inverse EWC regularizer
+  inverse_ewc_use_l2: false       # Use L2 distance for inverse EWC instead of L1
+  previous_fisher_path: null      # Path to previously saved fisher information dictionary
+  save_fisher_path: null          # Path to save fisher information dictionary
+
+  # Trajectory
+  trajectory_lambda: 0.0          # Lambda weight for trajectory regularizer
+  previous_delta_path: null       # Path to previous parameter deltas
+  save_delta_path: null           # Path to save parameter deltas
+  set_original_params_to_base: false # Set original parameters to base model
+
+  # SelFT
+  selft_loss: null                # Type of importance loss to use ['esd', 'ca']
+  selft_topk: 0.01                # Top-k percentage of parameters by importance
+  selft_anchor: ""                # Anchor concept for ca loss
+  selft_grad_dict_path: null      # Path to save/load gradient dictionary
+  selft_mask_dict_path: null      # Path to save/load mask dictionary
+
+  # Gradient Projection
+  with_gradient_projection: false # Whether to apply gradient projection to preserve anchor concepts
+  gradient_projection_prompts: null # Path to a file containing prompts for gradient projection
+  gradient_projection_num_prompts: 200 # Number of prompts to generate for gradient projection
+  previously_unlearned: null # List of previously unlearned concepts

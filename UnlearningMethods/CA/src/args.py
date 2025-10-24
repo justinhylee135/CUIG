@@ -15,7 +15,17 @@ def parse_args(input_args=None):
     ## Regularization
     parser.add_argument('--l2sp_weight', type=float, default=0.0, help='Weight for L2SP regularizer')
     parser.add_argument('--l1sp_weight', type=float, default=0.0, help='Weight for L1SP regularizer')
-    ## SelFT 
+    ### Inverse EWC
+    parser.add_argument('--inverse_ewc_lambda', type=float, default=0.0, help='Lambda weight for inverse EWC regularizer')
+    parser.add_argument('--inverse_ewc_use_l2', action='store_true', default=False, help='Use L2 distance for inverse EWC instead of L1')
+    parser.add_argument('--previous_fisher_path', type=str, default=None, help='Path to previously saved fisher information dictionary')
+    parser.add_argument('--save_fisher_path', type=str, default=None, help='Path to save fisher information dictionary')
+    ### Trajectory
+    parser.add_argument('--trajectory_lambda', type=float, default=0.0, help='Lambda weight for trajectory regularizer')
+    parser.add_argument('--previous_delta_path', type=str, default=None, help='Path to previous parameter deltas')
+    parser.add_argument('--save_delta_path', type=str, default=None, help='Path to save parameter deltas')
+    parser.add_argument('--set_original_params_to_base', action='store_true', default=False, help='Set original parameters to base model')
+    ## SelFT
     parser.add_argument('--selft_loss', type=str, default=None, choices=['esd', 'ca'], help='Type of importance loss to use')
     parser.add_argument('--selft_topk', type=float, default=0.01, help='Top-k percentage of of parameters by importance.')
     parser.add_argument('--selft_anchor', type=str, default="", help='Anchor concept for ca loss')

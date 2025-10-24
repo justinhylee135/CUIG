@@ -27,6 +27,17 @@ from ContinualEnhancements.Simultaneous.sim_utils import sample_and_evaluate_ua,
 ### Regularization
 from ContinualEnhancements.Regularization.l1sp import calculate_l1sp_loss
 from ContinualEnhancements.Regularization.l2sp import calculate_l2sp_loss
+from ContinualEnhancements.Regularization.inverse_ewc import (
+    accumulate_fisher,
+    calculate_inverse_ewc_loss,
+    load_fisher_information,
+    save_fisher_information
+)
+from ContinualEnhancements.Regularization.trajectory import (
+    calculate_trajectory_loss,
+    load_delta_from_path,
+    save_delta_to_path
+)
 ### SelFT
 from ContinualEnhancements.SelFT.selft_utils import (
     get_selft_mask_dict,
@@ -61,6 +72,7 @@ if __name__ == '__main__':
     parser.add_argument('--devices', help='CUDA devices used for loading frozen and esd unet', type=str, required=False, default='0,0')
     parser.add_argument('--seed', help='Random seed for reproducibility', type=int, required=False, default=42)
     parser.add_argument('--sample_latent_from_frz_pipeline', help='Sample latent from frozen pipeline instead of esd pipeline.', action='store_true', default=False)
+    parser.add_argument('--dont_use_safetensors', help='Do not use safetensors for loading model weights.', action='store_true', default=False)
     
     # Input/Output
     parser.add_argument('--base_model_dir', help='Directory to diffusers pipeline', type=str, required=False, default='CompVis/stable-diffusion-v1-4')
@@ -80,7 +92,17 @@ if __name__ == '__main__':
     ## Regularizers
     parser.add_argument('--l2sp_weight', type=float, default=0.0, help='Weight for L2SP regularizer')
     parser.add_argument('--l1sp_weight', type=float, default=0.0, help='Weight for L1SP regularizer')
-    
+    ### Inverse EWC
+    parser.add_argument('--inverse_ewc_lambda', type=float, default=0.0, help='Lambda weight for inverse EWC regularizer')
+    parser.add_argument('--inverse_ewc_use_l2', action='store_true', default=False, help='Use L2 distance for inverse EWC instead of L1')
+    parser.add_argument('--previous_fisher_path', type=str, default=None, help='Path to previously saved fisher information dictionary')
+    parser.add_argument('--save_fisher_path', type=str, default=None, help='Path to save fisher information dictionary')
+    ### Trajectory
+    parser.add_argument('--trajectory_lambda', type=float, default=0.0, help='Lambda weight for trajectory regularizer')
+    parser.add_argument('--previous_delta_path', type=str, default=None, help='Path to previous parameter deltas')
+    parser.add_argument('--save_delta_path', type=str, default=None, help='Path to save parameter deltas')
+    parser.add_argument('--set_original_params_to_base', action='store_true', default=False, help='Set original parameters to base model')
+
     ## SelFT
     parser.add_argument('--selft_loss', type=str, default=None, choices=['esd', 'ca'], help='Type of importance loss to use')
     parser.add_argument('--selft_topk', type=float, default=0.01, help='Top-k percentage of of parameters by importance.')
@@ -121,7 +143,7 @@ if __name__ == '__main__':
      
     # Load pipelines
     args.devices = [f'cuda:{int(d.strip())}' for d in args.devices.split(',')]
-    frz_pipeline, esd_pipeline = get_pipelines(args.base_model_dir, args.unet_ckpt, args.use_base_for_frz_unet, args.devices)
+    frz_pipeline, esd_pipeline, base_unet_sd = get_pipelines(args.base_model_dir, args.unet_ckpt, args.use_base_for_frz_unet, args.dont_use_safetensors, args.devices)
     original_params = {}
 
     # Choose parameters to train based on train_method
@@ -133,8 +155,15 @@ if __name__ == '__main__':
             if args.verbose: print(f"{i}. {name}")
             param.requires_grad = True
             i+=1
+
+            if args.set_original_params_to_base:
+                original_params[name] = base_unet_sd[name].detach().clone().requires_grad_(False)
         else:
             param.requires_grad = False
+    
+    # Set original parameter to base (flag in args)
+    if args.set_original_params_to_base:
+        print(f"\tCollected {len(original_params)} original parameters from base model for args.original_params")
 
     # Set up training parameters
     lr = args.lr
@@ -166,7 +195,40 @@ if __name__ == '__main__':
     # Print Regularization settings (if selected)
     if args.l1sp_weight > 0.0: print(f"Using L1SP regularizer with weight '{args.l1sp_weight}'")
     if args.l2sp_weight > 0.0: print(f"Using L2SP regularizer with weight '{args.l2sp_weight}'")
-    
+    ## Inverse EWC
+    current_fisher = {}
+    previous_aggregated_fisher = None
+    if args.inverse_ewc_lambda > 0.0:
+        print(f"Using Inverse EWC regularizer with lambda '{args.inverse_ewc_lambda}'")
+        
+        # Choose parameter difference metric
+        if args.inverse_ewc_use_l2:
+            print(f"\tUsing L2 distance for Inverse EWC loss")
+        else:
+            print(f"\tUsing L1 distance for Inverse EWC loss")
+        
+        # Load previous fisher information
+        if args.previous_fisher_path is not None and os.path.exists(args.previous_fisher_path):
+            print(f"\tLoading previous fisher information from '{args.previous_fisher_path}'")
+            previous_aggregated_fisher = load_fisher_information(args.previous_fisher_path, args.devices[0])
+        else:
+            args.inverse_ewc_lambda = 0.0
+            print(f"\tNo previous fisher information found. Turning off Inverse EWC regularization...")
+        
+        if args.save_fisher_path is not None:
+            print(f"\tWill accumulate fisher information during unlearning and save to '{args.save_fisher_path}'")
+    ## Trajectory Regularization
+    previous_aggregated_delta = None
+    if args.trajectory_lambda > 0.0:
+        print(f"Using Trajectory regularizer with lambda '{args.trajectory_lambda}'")
+
+        if args.previous_delta_path is not None and os.path.exists(args.previous_delta_path):
+            print(f"\tLoading previous parameter deltas from '{args.previous_delta_path}'")
+            previous_aggregated_delta = load_delta_from_path(args.previous_delta_path, args.devices[0])
+        else:
+            print(f"\tNo previous parameter deltas found. Turning off Trajectory regularization...")
+            args.trajectory_lambda = 0.0
+
     # Initialize SelFT variables
     selft_device = args.devices[0]
     selft_mask_dict = None
@@ -287,17 +349,40 @@ if __name__ == '__main__':
             loss = criteria(pnoise_prompt_esd, target)
             
             # Regularizers
+            esd_loss = loss.detach().clone()
             l1sp_loss = None
             l2sp_loss = None
+            inverse_ewc_loss = None
+            trajectory_loss = None
             if args.l1sp_weight > 0.0:
                 l1sp_loss = args.l1sp_weight * calculate_l1sp_loss(esd_pipeline.unet, original_params)
                 loss += l1sp_loss
             if args.l2sp_weight > 0.0:
                 l2sp_loss = args.l2sp_weight * calculate_l2sp_loss(esd_pipeline.unet, original_params)
                 loss += l2sp_loss
-
+            if args.inverse_ewc_lambda > 0.0 and previous_aggregated_fisher is not None:
+                inverse_ewc_loss = args.inverse_ewc_lambda * calculate_inverse_ewc_loss(
+                    esd_pipeline.unet, 
+                    previous_aggregated_fisher, 
+                    original_params, 
+                    args.devices[0],
+                    use_l2=args.inverse_ewc_use_l2
+                )
+                loss += inverse_ewc_loss
+            if args.trajectory_lambda > 0.0 and previous_aggregated_delta is not None:
+                trajectory_loss = args.trajectory_lambda * calculate_trajectory_loss(
+                    esd_pipeline.unet,
+                    previous_aggregated_delta,
+                    original_params,
+                    args.devices[0]
+                )
+                loss += trajectory_loss
             # Take Gradient
             loss.backward()
+            
+            # Accumulate Fisher for this unlearning run (only used next unlearning run)
+            if args.save_fisher_path is not None:
+                current_fisher = accumulate_fisher(esd_pipeline.unet, current_fisher)
             
             # Make gradient orthogonal to text embedding space of anchor concepts
             if args.with_gradient_projection:
@@ -311,9 +396,12 @@ if __name__ == '__main__':
             opt.step()
             
             # Log progress (add regularizer losses if they exist)
-            pbar_postfix = {"loss": loss.item(), "t": timestep_idx, "prompt": f"'{prompt}'"}
+            pbar_postfix = {"total_loss": loss.item(), "t": timestep_idx, "prompt": f"'{prompt}'"}
             if l1sp_loss is not None: pbar_postfix["l1_loss"] = l1sp_loss.item()
             if l2sp_loss is not None: pbar_postfix["l2_loss"] = l2sp_loss.item()
+            if inverse_ewc_loss is not None: pbar_postfix["ewc_loss"] = inverse_ewc_loss.item()
+            if trajectory_loss is not None: pbar_postfix["trajectory_loss"] = trajectory_loss.item()
+            if len(pbar_postfix) > 3: pbar_postfix["esd_loss"] = esd_loss.item()
             pbar.set_postfix(pbar_postfix)
             
             # Simultaneous Early Stopping
@@ -341,6 +429,14 @@ if __name__ == '__main__':
             hook.remove()
         print(f"Removed '{len(grad_hooks)}' gradient hooks")
     
+    # Save Fisher Information
+    if args.save_fisher_path is not None and current_fisher:
+        save_fisher_information(current_fisher, args.save_fisher_path, iteration, previous_aggregated_fisher)
+        
+    # Save parameter delta
+    if args.save_delta_path is not None:                
+        save_delta_to_path(esd_pipeline.unet, original_params, args.save_delta_path, previous_aggregated_delta)
+
     # Finalize training
     esd_pipeline.unet.eval()
     print(f"Training complete. Printing prompt sample counts below")

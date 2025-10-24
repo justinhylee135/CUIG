@@ -29,6 +29,69 @@ accelerate launch \
     --scale_lr --hflip --noaug \
     --enable_xformers_memory_efficient_attention
 ```
+
+Trajectory Loss
+```bash
+accelerate launch \
+    --config_file $REPO_ROOT/UnlearningMethods/CA/accelerate_config.yaml \
+    train_ca.py \
+    --concept_type style \
+    --base_model_dir $BASE_MODEL_DIR  \
+    --max_train_steps 1000 \
+    --train_size 200 \
+    --class_data_dir $REPO_ROOT/UnlearningMethods/CA/anchor_datasets/style/painting_unlearncanvas_diffusers \
+    --class_prompt $REPO_ROOT/UnlearningMethods/CA/anchor_prompts/style/painting.txt  \
+    --scale_lr --hflip --noaug \
+    --enable_xformers_memory_efficient_attention \
+    --caption_target "Byzantine" \
+    --output_dir $OUTPUT_ROOT/ca/models/continual/trajectory/style/10.0_base/Byzantine \
+    --unet_ckpt /fs/scratch/PAS2099/lee.10369/CUIG/ca/models/continual/trajectory/style/Abstractionism_L1SP50/delta.bin \
+    --save_delta_path /fs/scratch/PAS2099/lee.10369/CUIG/ca/models/continual/trajectory/style/10.0_base/Byzantine_delta.pth \
+    --previous_delta_path /fs/scratch/PAS2099/lee.10369/CUIG/ca/models/continual/trajectory/style/Abstractionism_L1SP50_delta.pth \
+    --trajectory_lambda 10.0
+```
+
+Inverse EWC
+```bash
+accelerate launch \
+    --config_file $REPO_ROOT/UnlearningMethods/CA/accelerate_config.yaml \
+    train_ca.py \
+    --concept_type style \
+    --base_model_dir $BASE_MODEL_DIR  \
+    --max_train_steps 1000 \
+    --train_size 200 \
+    --class_data_dir $REPO_ROOT/UnlearningMethods/CA/anchor_datasets/style/painting_unlearncanvas_diffusers \
+    --class_prompt $REPO_ROOT/UnlearningMethods/CA/anchor_prompts/style/painting.txt  \
+    --scale_lr --hflip --noaug \
+    --enable_xformers_memory_efficient_attention \
+    --caption_target "Byzantine" \
+    --output_dir $OUTPUT_ROOT/ca/models/continual/inverse_ewc/style/10.0/thruByzantine \
+    --unet_ckpt /fs/scratch/PAS2099/lee.10369/CUIG/ca/models/continual/inverse_ewc/style/Abstractionism/delta.bin \
+    --inverse_ewc_lambda 10.0 \
+    --save_fisher_path $OUTPUT_ROOT/ca/models/continual/inverse_ewc/style/10.0/thruByzantine_FIM.pth \
+    --previous_fisher_path /fs/scratch/PAS2099/lee.10369/CUIG/ca/models/continual/inverse_ewc/style/Abstractionism_FIM.pth
+```
+
+L1SP Base
+```bash
+accelerate launch \
+    --config_file $REPO_ROOT/UnlearningMethods/CA/accelerate_config.yaml \
+    train_ca.py \
+    --concept_type style \
+    --base_model_dir $BASE_MODEL_DIR  \
+    --max_train_steps 1000 \
+    --train_size 200 \
+    --class_data_dir $REPO_ROOT/UnlearningMethods/CA/anchor_datasets/style/painting_unlearncanvas_diffusers \
+    --class_prompt $REPO_ROOT/UnlearningMethods/CA/anchor_prompts/style/painting.txt  \
+    --scale_lr --hflip --noaug \
+    --enable_xformers_memory_efficient_attention \
+    --caption_target "Cartoon" \
+    --output_dir $OUTPUT_ROOT/ca/models/continual/l1sp/style/50_base/Cartoon \
+    --unet_ckpt $OUTPUT_ROOT/ca/models/continual/l1sp/style/50_base/Byzantine/delta.bin \
+    --l1sp_weight 50 \
+    --set_original_params_to_base
+```
+
 #### Object
 ```bash
 accelerate launch \
@@ -42,6 +105,35 @@ accelerate launch \
     --num_class_images 200 \
     --class_data_dir $REPO_ROOT/UnlearningMethods/CA/anchor_datasets/object/Trees \
     --class_prompt $REPO_ROOT/UnlearningMethods/CA/anchor_prompts/object/Trees.txt  \
+    --scale_lr --hflip --noaug \
+    --enable_xformers_memory_efficient_attention 
+```
+```bash
+accelerate launch \
+    --config_file $REPO_ROOT/UnlearningMethods/CA/accelerate_config.yaml \
+    train_ca.py \
+    --caption_target '["architecture+bear", "butterfly+bear", "flame+bear", "flower+bear", "horse+bear", "human+bear", "sea+bear", "tree+bear"]' \
+    --concept_type object \
+    --output_dir $OUTPUT_ROOT/ca/models/independent/base/object_all/Bears \
+    --base_model_dir $REPO_ROOT/UnlearningMethods/base_models/UnlearnCanvas  \
+    --max_train_steps 2000 \
+    --num_class_images 200 \
+    --class_data_dir '["/users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/CA/anchor_datasets/object/Architectures",
+                        "/users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/CA/anchor_datasets/object/Butterfly",
+                        "/users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/CA/anchor_datasets/object/Flame",
+                        "/users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/CA/anchor_datasets/object/Flowers",
+                        "/users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/CA/anchor_datasets/object/Horses",
+                        "/users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/CA/anchor_datasets/object/Human",
+                        "/users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/CA/anchor_datasets/object/Sea",
+                        "/users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/CA/anchor_datasets/object/Trees"]' \
+    --class_prompt '["/users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/CA/anchor_prompts/object/Architectures.txt",
+                     "/users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/CA/anchor_prompts/object/Butterfly.txt",
+                     "/users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/CA/anchor_prompts/object/Flame.txt",
+                     "/users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/CA/anchor_prompts/object/Flowers.txt",
+                     "/users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/CA/anchor_prompts/object/Horses.txt",
+                     "/users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/CA/anchor_prompts/object/Human.txt",
+                     "/users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/CA/anchor_prompts/object/Sea.txt",
+                     "/users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/CA/anchor_prompts/object/Trees.txt"]'  \
     --scale_lr --hflip --noaug \
     --enable_xformers_memory_efficient_attention 
 ```

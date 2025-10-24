@@ -42,6 +42,7 @@ def collate_fn(examples, with_prior_preservation):
     image_paths = [example["image_path"] for example in examples]
     target_prompts = [example["target_prompt"] for example in examples]
     anchor_prompts = [example["anchor_prompt"] for example in examples]
+    anchors = [example["anchor"] for example in examples]
     # Concat class and instance examples for prior preservation.
     # We do this to avoid doing two forward passes.
     if with_prior_preservation:
@@ -64,6 +65,7 @@ def collate_fn(examples, with_prior_preservation):
         "image_paths": image_paths,
         "target_prompts": target_prompts,
         "anchor_prompts": anchor_prompts,
+        "anchors": anchors
     }
     return batch
 
@@ -191,6 +193,7 @@ class CustomDiffusionDataset(Dataset):
         return instance_image, mask
 
     def __getprompt__(self, instance_prompt, instance_target):
+        anchor=""
         if self.concept_type == "style":
             # Clean up instance_target
             instance_target = instance_target.replace("_", " ")
@@ -228,13 +231,14 @@ class CustomDiffusionDataset(Dataset):
                 instance_prompt = target
             else:
                 # Replace anchor with target in prompt
-                instance_prompt = re.sub(re.escape(anchor), target, instance_prompt, flags=re.IGNORECASE)
-                if instance_prompt == anchor:
-                    instance_prompt = f"A {target} image"
-                    print(f"Unsuccessful replacement for anchor '{anchor}' in prompt '{instance_prompt}'. Using '{instance_prompt}' instead.")
+                replaced_instance_prompt = re.sub(re.escape(anchor), target, instance_prompt, flags=re.IGNORECASE)
+                if replaced_instance_prompt == instance_prompt:
+                    replaced_instance_prompt = f"A {target} image"
+                    print(f"Unsuccessful replacement for anchor '{anchor}' in prompt '{instance_prompt}'. Using '{replaced_instance_prompt}' instead.")
+                instance_prompt = replaced_instance_prompt
         elif self.concept_type == "memorization":
             instance_prompt = instance_target.split("+")[1]
-        return instance_prompt
+        return instance_prompt, anchor
 
     def __getitem__(self, index):
         example = {}
@@ -253,9 +257,10 @@ class CustomDiffusionDataset(Dataset):
             instance_target = instance_target[index % len(instance_target)]
 
         instance_anchor_prompt = instance_prompt
-        instance_prompt = self.__getprompt__(instance_prompt, instance_target)
+        instance_prompt, anchor = self.__getprompt__(instance_prompt, instance_target)
         example["anchor_prompt"] = instance_anchor_prompt
         example["target_prompt"] = instance_prompt
+        example["anchor"] = anchor
 
         # apply resize augmentation and create a valid image region mask
         random_scale = self.size
@@ -898,7 +903,7 @@ def setup_data_and_scheduler(args, tokenizer, accelerator, optimizer):
     """
     # Create dataset and dataloader
     num_class_images = min(args.train_size, args.num_class_images)
-    print(f"Creating training dataset with '{num_class_images}' images...")
+    print(f"\tCreating training dataset with '{num_class_images}' images...")
     train_dataset = CustomDiffusionDataset(
         concepts_list=args.concepts_list,
         concept_type=args.concept_type,
@@ -912,7 +917,7 @@ def setup_data_and_scheduler(args, tokenizer, accelerator, optimizer):
         aug=not args.noaug,
     )
 
-    print(f"Creating training dataloader with '{len(train_dataset)}' examples and batchsize '{args.train_batch_size}'...")
+    print(f"\tCreating training dataloader with '{len(train_dataset)}' examples and batchsize '{args.train_batch_size}'...")
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=args.train_batch_size,
@@ -929,10 +934,10 @@ def setup_data_and_scheduler(args, tokenizer, accelerator, optimizer):
     if args.max_train_steps is None:
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
         overrode_max_train_steps = True
-    print(f"Number of training steps: '{args.max_train_steps}'")
+    print(f"\tNumber of training steps: '{args.max_train_steps}'")
 
     # Create learning rate scheduler
-    print(f"Using lr scheduler: '{args.lr_scheduler}'")
+    print(f"\tUsing lr scheduler: '{args.lr_scheduler}'")
     lr_scheduler = get_scheduler(
         args.lr_scheduler,
         optimizer=optimizer,

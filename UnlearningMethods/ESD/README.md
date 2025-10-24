@@ -22,6 +22,37 @@ python train_esd.py \
 --save_path $OUTPUT_ROOT/esd/models/independent/base/style/Abstractionism.pth \
 --base_model_dir $BASE_MODEL_DIR 
 ```
+
+```bash
+python -m debugpy --listen 10.6.6.4:5678 --wait-for-client \
+train_esd.py \
+--concept 'Byzantine' \
+--concept_type 'style' \
+--train_method 'kv-xattn' \
+--save_path $OUTPUT_ROOT/esd/models/continual/inverse_ewc/style/kv-xattn_lr1e5_ng1_sg3/1/thruByzantine.pth \
+--base_model_dir $BASE_MODEL_DIR \
+--unet_ckpt /fs/scratch/PAS2099/lee.10369/CUIG/esd/models/continual/inverse_ewc/style/Abstractionism.pth \
+--inverse_ewc_lambda 1.0 \
+--save_fisher_path $OUTPUT_ROOT/esd/models/continual/inverse_ewc/style/kv-xattn_lr1e5_ng1_sg3/1/thruByzantine_FIM.pth \
+--previous_fisher_path $OUTPUT_ROOT/esd/models/continual/inverse_ewc/style/Abstractionism_FIM.pth \
+--overwrite_existing_ckpt
+```
+
+```bash
+python -m debugpy --listen 10.6.5.3:5678 --wait-for-client \
+train_esd.py \
+--concept 'Byzantine' \
+--concept_type 'style' \
+--train_method 'kv-xattn' \
+--save_path /fs/scratch/PAS2099/lee.10369/CUIG/esd/models/continual/trajectory/style/kv-xattn_lr1e5_ng1_sg3/1/thruByzantine.pth \
+--base_model_dir $BASE_MODEL_DIR \
+--unet_ckpt /fs/scratch/PAS2099/lee.10369/CUIG/esd/models/continual/trajectory/style/kv-xattn_lr1e5_ng1_sg3/Abstractionism.pth \
+--trajectory_lambda 1.0 \
+--save_delta_path /fs/scratch/PAS2099/lee.10369/CUIG/esd/models/continual/trajectory/style/kv-xattn_lr1e5_ng1_sg3/1/thruByzantine_delta.pth \
+--previous_delta_path /fs/scratch/PAS2099/lee.10369/CUIG/esd/models/continual/trajectory/style/kv-xattn_lr1e5_ng1_sg3/Abstractionism_delta.pth \
+--overwrite_existing_ckpt
+```
+
 #### Object
 ```bash
 python train_esd.py \

@@ -1,0 +1,162 @@
+{
+  "analysis_type": "text_embedding_similarity",
+  "target_style": "Abstractionism",
+  "target_prompt": "Abstractionism Style",
+  "comparison_styles": [
+    "Blossom_Season",
+    "Rust",
+    "Crayon",
+    "Fauvism",
+    "Superstring",
+    "Red_Blue_Ink",
+    "Gorgeous_Love",
+    "French",
+    "Joy",
+    "Greenfield",
+    "Expressionism",
+    "Impressionism"
+  ],
+  "analysis_date": "2025-09-24T21:37:15.007570",
+  "model_config": "/users/PAS2099/justinhylee135/Research/UnlearningDM/MMUC/machine_unlearning/mu_erasing_concept_esd/configs/train_esd.yaml",
+  "model_checkpoint": "/users/PAS2099/justinhylee135/Research/UnlearningDM/MMDU/external_model_ckpts/UnlearnCanvas/unlearncanvas_compvis.ckpt",
+  "device": "cpu",
+  "embedding_dimensions": 59136,
+  "similarity_metrics": [
+    "cosine_similarity",
+    "l2_similarity",
+    "dot_product_similarity",
+    "pearson_correlation"
+  ],
+  "ranking_by_cosine_similarity": [
+    {
+      "style": "Expressionism",
+      "raw_style": "Expressionism",
+      "prompt": "Expressionism Style",
+      "cosine_similarity": 0.7308830618858337,
+      "l2_similarity": -184.4947967529297,
+      "dot_product_similarity": 46218.59765625,
+      "pearson_correlation": 0.7278785109519958
+    },
+    {
+      "style": "Fauvism",
+      "raw_style": "Fauvism",
+      "prompt": "Fauvism Style",
+      "cosine_similarity": 0.6139992475509644,
+      "l2_similarity": -220.1334991455078,
+      "dot_product_similarity": 38531.703125,
+      "pearson_correlation": 0.6096665859222412
+    },
+    {
+      "style": "Impressionism",
+      "raw_style": "Impressionism",
+      "prompt": "Impressionism Style",
+      "cosine_similarity": 0.6040204763412476,
+      "l2_similarity": -223.74301147460938,
+      "dot_product_similarity": 38179.1015625,
+      "pearson_correlation": 0.5995481014251709
+    },
+    {
+      "style": "Gorgeous Love",
+      "raw_style": "Gorgeous_Love",
+      "prompt": "Gorgeous Love Style",
+      "cosine_similarity": 0.5378000736236572,
+      "l2_similarity": -241.4062957763672,
+      "dot_product_similarity": 33901.49609375,
+      "pearson_correlation": 0.5325331687927246
+    },
+    {
+      "style": "Superstring",
+      "raw_style": "Superstring",
+      "prompt": "Superstring Style",
+      "cosine_similarity": 0.5217852592468262,
+      "l2_similarity": -244.56033325195312,
+      "dot_product_similarity": 32619.15625,
+      "pearson_correlation": 0.5164267420768738
+    },
+    {
+      "style": "French",
+      "raw_style": "French",
+      "prompt": "French Style",
+      "cosine_similarity": 0.4862233102321625,
+      "l2_similarity": -255.77105712890625,
+      "dot_product_similarity": 30955.25390625,
+      "pearson_correlation": 0.48058608174324036
+    },
+    {
+      "style": "Rust",
+      "raw_style": "Rust",
+      "prompt": "Rust Style",
+      "cosine_similarity": 0.47988957166671753,
+      "l2_similarity": -257.0270690917969,
+      "dot_product_similarity": 30477.046875,
+      "pearson_correlation": 0.4742174446582794
+    },
+    {
+      "style": "Crayon",
+      "raw_style": "Crayon",
+      "prompt": "Crayon Style",
+      "cosine_similarity": 0.47812727093696594,
+      "l2_similarity": -258.077880859375,
+      "dot_product_similarity": 30510.34765625,
+      "pearson_correlation": 0.4723842144012451
+    },
+    {
+      "style": "Joy",
+      "raw_style": "Joy",
+      "prompt": "Joy Style",
+      "cosine_similarity": 0.4646395146846771,
+      "l2_similarity": -260.3179016113281,
+      "dot_product_similarity": 29406.1015625,
+      "pearson_correlation": 0.45861324667930603
+    },
+    {
+      "style": "Greenfield",
+      "raw_style": "Greenfield",
+      "prompt": "Greenfield Style",
+      "cosine_similarity": 0.4635009765625,
+      "l2_similarity": -259.73248291015625,
+      "dot_product_similarity": 29137.138671875,
+      "pearson_correlation": 0.45747342705726624
+    },
+    {
+      "style": "Red Blue Ink",
+      "raw_style": "Red_Blue_Ink",
+      "prompt": "Red Blue Ink Style",
+      "cosine_similarity": 0.45260685682296753,
+      "l2_similarity": -262.5659484863281,
+      "dot_product_similarity": 28498.849609375,
+      "pearson_correlation": 0.446444571018219
+    },
+    {
+      "style": "Blossom Season",
+      "raw_style": "Blossom_Season",
+      "prompt": "Blossom Season Style",
+      "cosine_similarity": 0.4413529336452484,
+      "l2_similarity": -263.72869873046875,
+      "dot_product_similarity": 27462.712890625,
+      "pearson_correlation": 0.43489447236061096
+    }
+  ],
+  "pca_analysis": {
+    "explained_variance_ratio": [
+      0.17142465710639954,
+      0.12404430657625198
+    ],
+    "total_explained_variance": 0.2954689562320709
+  },
+  "summary_stats": {
+    "most_similar": {
+      "style": "Expressionism",
+      "cosine_similarity": 0.7308830618858337
+    },
+    "least_similar": {
+      "style": "Blossom Season",
+      "cosine_similarity": 0.4413529336452484
+    },
+    "average_cosine_similarity": 0.522902379433314,
+    "std_cosine_similarity": 0.08637816712749248,
+    "cosine_pearson_correlation": 0.9999994045896371,
+    "cosine_l2_correlation": 0.9977821479252037,
+    "cosine_dot_correlation": 0.9991556158676645
+  }
+}

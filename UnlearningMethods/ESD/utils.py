@@ -32,15 +32,17 @@ def process_input_concepts(concept, concept_type):
 
     # Generate prompts for each concept
     return [prompt_fn(c) for c in concepts]
-        
-def load_pipeline(base_model_dir, device="cuda", dtype=torch.float32):
-    """Load a diffusers pipeline from model path"""    
+
+def load_pipeline(base_model_dir, dont_use_safetensors, device="cuda", dtype=torch.float32):
+    """Load a diffusers pipeline from model path"""
     # Load the pipeline
+    if dont_use_safetensors: print(f"Using '.bin' weights instead of'.safetensors' for loading model weights from '{base_model_dir}'")
     pipeline = StableDiffusionPipeline.from_pretrained(
         base_model_dir,
         torch_dtype=dtype,
         safety_checker=None,
-        requires_safety_checker=False
+        requires_safety_checker=False,
+        use_safetensors=(not dont_use_safetensors)
     )
     
     # Set scheduler to DDIM
@@ -56,13 +58,14 @@ def load_pipeline(base_model_dir, device="cuda", dtype=torch.float32):
     
     return pipeline
 
-def get_pipelines(model_path, unet_ckpt, use_base_for_frz_unet, devices):
+def get_pipelines(model_path, unet_ckpt, use_base_for_frz_unet, dont_use_safetensors, devices):
     """Get original and trainable pipelines"""
     # Load frozen and esd pipeline
     print(f"Loading pipeline from '{model_path}'")
-    frz_pipeline = load_pipeline(model_path, devices[1])
-    esd_pipeline = load_pipeline(model_path, devices[0])
-    
+    frz_pipeline = load_pipeline(model_path, dont_use_safetensors, devices[1])
+    esd_pipeline = load_pipeline(model_path, dont_use_safetensors, devices[0])
+    base_unet_sd = esd_pipeline.unet.state_dict().copy()
+
     # Load UNet checkpoint if provided
     if unet_ckpt is not None:
         if not os.path.exists(unet_ckpt):
@@ -89,7 +92,7 @@ def get_pipelines(model_path, unet_ckpt, use_base_for_frz_unet, devices):
     frz_pipeline.unet.eval()
     frz_pipeline.unet.requires_grad_(False)
     
-    return frz_pipeline, esd_pipeline
+    return frz_pipeline, esd_pipeline, base_unet_sd
 
 def get_trainable_params(pipeline, train_method):
     train_param_names = []

@@ -17,7 +17,7 @@ if __name__ == '__main__':
         prog='Sampler',
         description='Sample Images from Unlearned Model')
     # Model parameters
-    parser.add_argument('--unet_ckpt_path', help='Path to UNet ckpt', type=str, required=True)
+    parser.add_argument('--unet_ckpt_path', help='Path to UNet ckpt', type=str, required=False)
     parser.add_argument('--pipeline_dir', help='Directory for Diffusers pipeline', type=str, required=True)
     parser.add_argument("--device", type=str, default="cuda:0")
 
@@ -65,28 +65,31 @@ if __name__ == '__main__':
     pipe = StableDiffusionPipeline.from_pretrained(args.pipeline_dir, torch_dtype=torch.float16, use_safetensors=True).to("cuda")
     
     # Load UNet ckpt
-    if ".safetensors" in args.unet_ckpt_path:
-        unet_state_dict = load_file(args.unet_ckpt_path, device="cuda")
-    else:
-        unet_state_dict = torch.load(args.unet_ckpt_path, map_location="cuda")
-        
-    # Clean keys
-    keys_list = list(unet_state_dict.keys())
-    for key in keys_list:
-        if key.startswith("unet."):
-            unet_state_dict[key.replace("unet.", "")] = unet_state_dict.pop(key)
+    unet_state_dict = None
+    if args.unet_ckpt_path is not None:
+        if ".safetensors" in args.unet_ckpt_path:
+            unet_state_dict = load_file(args.unet_ckpt_path, device="cuda")
+        else:
+            unet_state_dict = torch.load(args.unet_ckpt_path, map_location="cuda")
     
-    # Extract state dictionary if in accelerator format
-    if "unet" in unet_state_dict:
-        unet_state_dict = unet_state_dict["unet"]
+    if unet_state_dict is not None:
+        # Clean keys
+        keys_list = list(unet_state_dict.keys())
+        for key in keys_list:
+            if key.startswith("unet."):
+                unet_state_dict[key.replace("unet.", "")] = unet_state_dict.pop(key)
         
-    # Print success
-    missing, unexpected = pipe.unet.load_state_dict(unet_state_dict, strict=False)
-    print(f"Loaded UNet from {args.unet_ckpt_path}")
-    print(f"Loaded keys: {len(unet_state_dict)}")
-    print(f"Missing keys: {len(missing)}")
-    print(f"Unexpected keys: {len(unexpected)}")
-        
+        # Extract state dictionary if in accelerator format
+        if "unet" in unet_state_dict:
+            unet_state_dict = unet_state_dict["unet"]
+            
+        # Print success
+        missing, unexpected = pipe.unet.load_state_dict(unet_state_dict, strict=False)
+        print(f"Loaded UNet from {args.unet_ckpt_path}")
+        print(f"Loaded keys: {len(unet_state_dict)}")
+        print(f"Missing keys: {len(missing)}")
+        print(f"Unexpected keys: {len(unexpected)}")
+    
     # Disable NSFW checker (sometimes incorrectly flags images)
     def dummy(images, **kwargs):
             return images, [False]
