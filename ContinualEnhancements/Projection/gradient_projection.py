@@ -5,25 +5,25 @@ import openai
 import re
 import ast
 
-def apply_gradient_projection(model, filtered_embedding_matrix, device, accelerator=None):
+def build_projection_matrix(filtered_embedding_matrix, device):
     """
-    Apply gradient projection using pre-filtered embedding matrix.
-    
+    Construct the orthogonal projection matrix used for gradient/weight projection.
+
     Args:
-        model: The UNet model
-        filtered_embedding_matrix: Pre-computed and filtered embedding matrix [embedding_dim, num_anchors]
-        device: Device to run computations on
-        accelerator: HuggingFace accelerator (optional)
+        filtered_embedding_matrix: Anchor embedding matrix [embedding_dim, num_anchors]
+        device: Target device for computations
+
+    Returns:
+        Projection matrix P with shape [embedding_dim, embedding_dim] or None if no anchors provided.
     """
-    # Check if we have valid embeddings
     if filtered_embedding_matrix is None or filtered_embedding_matrix.shape[1] == 0:
-        return  # No projection needed if no anchor embeddings
-    
-    C = filtered_embedding_matrix.to(device)  # [embedding_dim, num_anchors]
+        return None
+
+    # Use float32 for stable linear algebra (bf16 lacks eig implementation)
+    C = filtered_embedding_matrix.to(device=device, dtype=torch.float32)
     embedding_dim = C.shape[0]
     num_anchors = C.shape[1]
-    
-    # Compute projection matrix: P = I - C(C^T C)^(-1)C^T
+
     try:
         # Compute C^T C
         CTC = C.T @ C  # [num_anchors, num_anchors]
@@ -55,10 +55,31 @@ def apply_gradient_projection(model, filtered_embedding_matrix, device, accelera
 
         # Compute Moore-Penrose pseudoinverse of C^T
         C_pinv = torch.linalg.pinv(C.T)  # [num_anchors, embedding_dim]
-        
+
         # Projection matrix P = I - C @ C_pinv
         I = torch.eye(embedding_dim, device=device, dtype=C.dtype)
         P = I - C @ C_pinv
+    
+    return P
+
+
+def apply_gradient_projection(model, filtered_embedding_matrix, device, accelerator=None):
+    """
+    Apply gradient projection using pre-filtered embedding matrix.
+    
+    Args:
+        model: The UNet model
+        filtered_embedding_matrix: Pre-computed and filtered embedding matrix [embedding_dim, num_anchors]
+        device: Device to run computations on
+        accelerator: HuggingFace accelerator (optional)
+    """
+    projection_matrix = build_projection_matrix(filtered_embedding_matrix, device)
+    if projection_matrix is None:
+        return  # No projection needed if no anchor embeddings
+    proj_dtype = projection_matrix.dtype
+    
+    C = filtered_embedding_matrix.to(device=device, dtype=proj_dtype)  # [embedding_dim, num_anchors]
+    embedding_dim = C.shape[0]
     
     # Get model with gradients
     model_to_process = accelerator.unwrap_model(model) if accelerator else model
@@ -98,10 +119,10 @@ def apply_gradient_projection(model, filtered_embedding_matrix, device, accelera
                     print(f"Warning: Could not reconstruct Geff for {name}, defaulting to down matrix projection")
                     gB = B.grad
                     if gB.ndim == 2 and gB.shape[1] == embedding_dim:
-                        B.grad.data = (gB.to(P.dtype) @ P).to(gB.dtype)
+                        B.grad.data = (gB.to(projection_matrix.dtype) @ projection_matrix).to(gB.dtype)
                     continue
                 
-                Geff_proj = (Geff @ P) # right projection in text dimension
+                Geff_proj = (Geff.to(proj_dtype) @ projection_matrix) # right projection in text dimension
                 gA_new, gB_new = _decompose_Geff_to_lora_grads(Geff_proj.to(A.grad.dtype), A.data, B.data, scale=scale)
                 
                 # Write back new grads
@@ -115,17 +136,17 @@ def apply_gradient_projection(model, filtered_embedding_matrix, device, accelera
             original_shape = param.grad.shape
             if len(original_shape) == 2:
                 # Standard linear layer: [out_features, in_features]
-                grad_matrix = param.grad  # [out_features, in_features]
-                projected_grad = grad_matrix @ P  # Project along input dimension               
-                param.grad.data = projected_grad
+                grad_matrix = param.grad.to(proj_dtype)  # [out_features, in_features]
+                projected_grad = grad_matrix @ projection_matrix  # Project along input dimension               
+                param.grad.data = projected_grad.to(param.grad.dtype)
             elif len(original_shape) == 1:
                 # Skip bias terms - no projection needed
                 continue
             else:
                 # Handle unexpected shapes by reshaping
-                grad_reshaped = param.grad.view(original_shape[0], -1)
-                projected_grad = grad_reshaped @ P
-                param.grad.data = projected_grad.view(original_shape)
+                grad_reshaped = param.grad.view(original_shape[0], -1).to(proj_dtype)
+                projected_grad = grad_reshaped @ projection_matrix
+                param.grad.data = projected_grad.view(original_shape).to(param.grad.dtype)
 
 # --- Minimal helpers for LoRA ΔW reconstruction/decomposition ---
 def _reconstruct_Geff_from_lora(A, B, gA, gB, reg=1e-4, scale=1.0):

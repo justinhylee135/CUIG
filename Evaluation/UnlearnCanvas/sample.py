@@ -62,8 +62,8 @@ if __name__ == '__main__':
     device = "cuda"
 
     # Load model
-    pipe = StableDiffusionPipeline.from_pretrained(args.pipeline_dir, torch_dtype=torch.float16, use_safetensors=True).to("cuda")
-    
+    pipe = StableDiffusionPipeline.from_pretrained(args.pipeline_dir, torch_dtype=torch.float16).to("cuda")
+
     # Load UNet ckpt
     unet_state_dict = None
     if args.unet_ckpt_path is not None:
@@ -107,6 +107,8 @@ if __name__ == '__main__':
             seed_everything(seed) # Set seed for reproducibility
             for style in styles_subset:
                 for obj in objects_subset:
+                    pbar.set_postfix({"Style": f"'{style}'", "Object": f"'{obj}'", "Seed": f"'{seed}'"})
+
                     # Set output path for image
                     output_path = os.path.join(args.output_dir, f"{style}_{obj}_seed{seed}.jpg")
                     
@@ -118,6 +120,7 @@ if __name__ == '__main__':
 
                     # Set prompt
                     prompt = f"A {obj} image in {style} style"
+                    # prompt = f"{obj}"
 
                     # Generate image
                     image = pipe(prompt=prompt, width=args.W, height=args.H, num_inference_steps=args.steps, guidance_scale=args.cfg_txt).images[0]

@@ -1,4 +1,5 @@
 import torch
+from argparse import Namespace
 from diffusers import StableDiffusionPipeline
 from src.cfr_utils import *
 from src.dataset import MACEDataset
@@ -18,6 +19,58 @@ def main(args):
     final_pipe.safety_checker = None
     final_pipe.requires_safety_checker = False
     final_projection_matrices, _, _ = get_ca_layers(final_pipe.unet, with_to_k=True)
+
+    # Capture baseline weights for CFR regularizers
+    param_name_map = {id(param): name for name, param in final_pipe.unet.named_parameters()}
+    projection_weight_names_final = [param_name_map.get(id(layer.weight), None) for layer in final_projection_matrices]
+    baseline_weight_map = {}
+    for name, layer in zip(projection_weight_names_final, final_projection_matrices):
+        if name is not None:
+            baseline_weight_map[name] = layer.weight.detach().clone()
+
+    # Ensure CFR configuration (projection, SelFT, etc.) is available
+    cfr_cfg = getattr(args, "cfr", None)
+    if cfr_cfg is None:
+        cfr_cfg = Namespace()
+        args.cfr = cfr_cfg
+
+    # Populate expected attributes with sensible defaults
+    if not hasattr(cfr_cfg, "l1sp_weight"):
+        cfr_cfg.l1sp_weight = 0.0
+    if not hasattr(cfr_cfg, "l2sp_weight"):
+        cfr_cfg.l2sp_weight = 0.0
+    if not hasattr(cfr_cfg, "with_gradient_projection"):
+        cfr_cfg.with_gradient_projection = False
+    if not hasattr(cfr_cfg, "projection_max_iters"):
+        cfr_cfg.projection_max_iters = None
+    if not hasattr(cfr_cfg, "projection_convergence_tol"):
+        cfr_cfg.projection_convergence_tol = None
+
+    need_cfr_setup = False
+    if getattr(cfr_cfg, "with_gradient_projection", False) and getattr(cfr_cfg, "projection_matrix", None) is None:
+        need_cfr_setup = True
+    if getattr(cfr_cfg, "selft_loss", None) is not None and getattr(cfr_cfg, "selft_mask_dict", None) is None:
+        need_cfr_setup = True
+
+    if need_cfr_setup:
+        from src.cfr_lora_training import setup_cfr_controls
+
+        device_for_cfr = final_projection_matrices[0].weight.device
+        cfr_cfg = setup_cfr_controls(
+            args,
+            final_pipe.unet,
+            final_pipe.text_encoder,
+            final_pipe.tokenizer,
+            device_for_cfr,
+        )
+        args.cfr = cfr_cfg
+
+    projection_matrix_for_cfr = (
+        getattr(cfr_cfg, "projection_matrix", None)
+        if getattr(cfr_cfg, "with_gradient_projection", False)
+        else None
+    )
+    selft_masks = getattr(cfr_cfg, "selft_mask_dict", None)
     
     print(f"Preparing dataset from '{args.input_data_dir}'...")
     train_dataset = MACEDataset(
@@ -40,6 +93,7 @@ def main(args):
     for layer_num in tqdm(range(len(final_projection_matrices))):
         CFR_dict[f'{layer_num}_for_mat1'] = None
         CFR_dict[f'{layer_num}_for_mat2'] = None
+        CFR_dict[f'{layer_num}_values_norm'] = None
         
     all_contexts = []
     all_valuess = []
@@ -81,20 +135,34 @@ def main(args):
     # Load cached prior knowledge for preserving
     if args.prior_preservation_cache_path:
         prior_preservation_cache_dict = torch.load(args.prior_preservation_cache_path, map_location=device)
+        for layer_num in range(len(final_projection_matrices)):
+            norm_key = f'{layer_num}_values_norm'
+            if norm_key not in prior_preservation_cache_dict:
+                prior_preservation_cache_dict[norm_key] = torch.tensor(
+                    0.0, device=device, dtype=final_projection_matrices[layer_num].weight.dtype
+                )
     else:
         prior_preservation_cache_dict = {}
         for layer_num in tqdm(range(len(final_projection_matrices))):
             prior_preservation_cache_dict[f'{layer_num}_for_mat1'] = .0
             prior_preservation_cache_dict[f'{layer_num}_for_mat2'] = .0
+            prior_preservation_cache_dict[f'{layer_num}_values_norm'] = .0
             
     # Load cached domain knowledge for preserving
     if args.domain_preservation_cache_path:
         domain_preservation_cache_dict = torch.load(args.domain_preservation_cache_path, map_location=device)
+        for layer_num in range(len(final_projection_matrices)):
+            norm_key = f'{layer_num}_values_norm'
+            if norm_key not in domain_preservation_cache_dict:
+                domain_preservation_cache_dict[norm_key] = torch.tensor(
+                    0.0, device=device, dtype=final_projection_matrices[layer_num].weight.dtype
+                )
     else:
         domain_preservation_cache_dict = {}
         for layer_num in tqdm(range(len(final_projection_matrices))):
             domain_preservation_cache_dict[f'{layer_num}_for_mat1'] = .0
             domain_preservation_cache_dict[f'{layer_num}_for_mat2'] = .0
+            domain_preservation_cache_dict[f'{layer_num}_values_norm'] = .0
     
     # integrate the preserving knowledge and multi-lora knowledge
     cache_dict = {}
@@ -106,18 +174,37 @@ def main(args):
                             + args.preserve_weight * domain_preservation_cache_dict[key]) \
                             + CFR_dict[key]
     
-        closed_form_refinement(final_projection_matrices, lamb=args.lamb, preserve_scale=1, cache_dict=cache_dict)
+        closed_form_refinement(
+            final_projection_matrices,
+            lamb=args.lamb,
+            preserve_scale=1,
+            cache_dict=cache_dict,
+            cfr_args=cfr_cfg,
+            original_weights=baseline_weight_map,
+            weight_names=projection_weight_names_final,
+            selft_masks=selft_masks,
+            projection_matrix=projection_matrix_for_cfr,
+        )
     else:
         for key in prior_preservation_cache_dict:
             cache_dict[key] = prior_preservation_cache_dict[key] \
                             + args.preserve_weight * domain_preservation_cache_dict[key]
                             
-        closed_form_refinement(final_projection_matrices, all_contexts, all_valuess, lamb=args.lamb, 
-                               preserve_scale=args.fuse_preserve_scale, cache_dict=cache_dict)
+        closed_form_refinement(
+            final_projection_matrices,
+            all_contexts,
+            all_valuess,
+            lamb=args.lamb,
+            preserve_scale=args.fuse_preserve_scale,
+            cache_dict=cache_dict,
+            cfr_args=cfr_cfg,
+            original_weights=baseline_weight_map,
+            weight_names=projection_weight_names_final,
+            selft_masks=selft_masks,
+            projection_matrix=projection_matrix_for_cfr,
+        )
 
     # save the final model
     final_pipe.save_pretrained(args.final_save_path)
 
     
-
-

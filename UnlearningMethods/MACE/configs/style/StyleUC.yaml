@@ -126,3 +126,31 @@ MACE:
   gradient_projection_prompts: null # Path to a file containing prompts for gradient projection
   gradient_projection_num_prompts: 200 # Number of prompts to generate for gradient projection
   previously_unlearned: null # List of previously unlearned concepts
+
+  lora_ft:
+    l1sp_weight: 0.0
+    l2sp_weight: 0.0
+    selft_loss: null
+    selft_topk: 0.01
+    selft_anchor: ""
+    selft_grad_dict_path: null
+    selft_mask_dict_path: null
+    with_gradient_projection: false
+    gradient_projection_prompts: null
+    gradient_projection_num_prompts: 200
+    gradient_projection_no_dual_domain: false
+    previously_unlearned: null
+
+  cfr:
+    l1sp_weight: 0.0
+    l2sp_weight: 0.0
+    selft_loss: null
+    selft_topk: 0.01
+    selft_anchor: ""
+    selft_grad_dict_path: null
+    selft_mask_dict_path: null
+    with_gradient_projection: false
+    gradient_projection_prompts: null
+    gradient_projection_num_prompts: 200
+    gradient_projection_no_dual_domain: false
+    previously_unlearned: null

@@ -53,7 +53,8 @@ from ContinualEnhancements.Regularization.trajectory import (
 from ContinualEnhancements.Projection.gradient_projection import (
     apply_gradient_projection,
     get_anchor_embeddings,
-    generate_gradient_projection_prompts
+    generate_gradient_projection_prompts,
+    build_projection_matrix
 )
 
 ### SelFT
@@ -251,7 +252,135 @@ def setup_continual_enhancement(args, unet, text_encoder, tokenizer, device):
             args.anchor_embeddings_matrix = None
 
 
+def setup_cfr_controls(args, unet, text_encoder, tokenizer, device):
+    """
+    Prepare auxiliary data for closed-form refinement regularization.
+    """
+    cfr_cfg = getattr(args, "cfr", Namespace())
+    if isinstance(cfr_cfg, dict):
+        cfr_cfg = Namespace(**cfr_cfg)
+        args.cfr = cfr_cfg
+
+    # Ensure expected attributes exist
+    if not hasattr(cfr_cfg, "l1sp_weight"):
+        cfr_cfg.l1sp_weight = 0.0
+    if not hasattr(cfr_cfg, "l2sp_weight"):
+        cfr_cfg.l2sp_weight = 0.0
+    if not hasattr(cfr_cfg, "selft_loss"):
+        cfr_cfg.selft_loss = None
+    if not hasattr(cfr_cfg, "selft_topk"):
+        cfr_cfg.selft_topk = 0.01
+    if not hasattr(cfr_cfg, "selft_anchor"):
+        cfr_cfg.selft_anchor = ""
+    if not hasattr(cfr_cfg, "selft_grad_dict_path"):
+        cfr_cfg.selft_grad_dict_path = None
+    if not hasattr(cfr_cfg, "selft_mask_dict_path"):
+        cfr_cfg.selft_mask_dict_path = None
+    if not hasattr(cfr_cfg, "with_gradient_projection"):
+        cfr_cfg.with_gradient_projection = False
+    if not hasattr(cfr_cfg, "gradient_projection_prompts"):
+        cfr_cfg.gradient_projection_prompts = None
+    if not hasattr(cfr_cfg, "gradient_projection_num_prompts"):
+        cfr_cfg.gradient_projection_num_prompts = 200
+    if not hasattr(cfr_cfg, "gradient_projection_no_dual_domain"):
+        cfr_cfg.gradient_projection_no_dual_domain = False
+    if not hasattr(cfr_cfg, "previously_unlearned"):
+        cfr_cfg.previously_unlearned = getattr(args, "previously_unlearned", None)
+
+    # SelFT masks for CFR
+    cfr_cfg.selft_mask_dict = None
+    if cfr_cfg.selft_loss is not None:
+        print(f"\t[CFR] Preparing SelFT masks with loss '{cfr_cfg.selft_loss}' and top-k '{cfr_cfg.selft_topk}'")
+        was_training = unet.training
+        unet.eval()
+        cfr_cfg.selft_mask_dict = get_selft_mask_dict(
+            unet,
+            text_encoder,
+            tokenizer,
+            cfr_cfg.selft_mask_dict_path,
+            cfr_cfg.selft_grad_dict_path,
+            getattr(args, "prompt_list", []),
+            cfr_cfg.selft_anchor if cfr_cfg.selft_anchor else getattr(args, "selft_anchor", "object"),
+            cfr_cfg.selft_topk,
+            cfr_cfg.selft_loss,
+            device,
+        )
+        if was_training:
+            unet.train()
+
+    # Gradient projection resources for CFR
+    cfr_cfg.anchor_prompts = []
+    cfr_cfg.anchor_embeddings_matrix = None
+    cfr_cfg.projection_matrix = None
+    if cfr_cfg.with_gradient_projection:
+        print(f"\t[CFR] Enabling geometry-constrained projection for closed-form refinement.")
+        prompts_path = cfr_cfg.gradient_projection_prompts
+        if prompts_path:
+            if os.path.isfile(prompts_path):
+                print(f"\t\t[CFR] Loading anchor prompts from '{prompts_path}'")
+                with open(prompts_path, "r") as fh:
+                    cfr_cfg.anchor_prompts = [line.strip() for line in fh.readlines() if line.strip()]
+            else:
+                print(f"\t\t[CFR] Generating anchor prompts to '{prompts_path}'")
+                cfr_cfg.anchor_prompts = generate_gradient_projection_prompts(
+                    file_path=prompts_path,
+                    num_prompts=cfr_cfg.gradient_projection_num_prompts,
+                    concept_type=getattr(args, "concept_type", "object"),
+                    previously_unlearned=cfr_cfg.previously_unlearned or getattr(args, "previously_unlearned", []),
+                    target_concept_list=getattr(args, "prompt_list", []),
+                    dual_domain=not cfr_cfg.gradient_projection_no_dual_domain,
+                )
+        elif hasattr(args, "anchor_prompts") and args.anchor_prompts:
+            print("\t\t[CFR] Reusing anchor prompts collected during LoRA fine-tuning.")
+            cfr_cfg.anchor_prompts = list(args.anchor_prompts)
+        else:
+            print("\t\t[CFR] Collecting anchor prompts from multi_concept...")
+            if hasattr(args, "multi_concept") and args.multi_concept:
+                for concept_info in args.multi_concept[0]:
+                    if isinstance(concept_info, (list, tuple)) and len(concept_info) > 0:
+                        concept_name = concept_info[0]
+                        cfr_cfg.anchor_prompts.append(f"a photo of {concept_name}")
+
+        if cfr_cfg.anchor_prompts:
+            cfr_cfg.anchor_embeddings_matrix = get_anchor_embeddings(
+                cfr_cfg.anchor_prompts, text_encoder, tokenizer, device
+            )
+            projection = build_projection_matrix(cfr_cfg.anchor_embeddings_matrix, device)
+            if projection is not None:
+                cfr_cfg.projection_matrix = projection
+            else:
+                print("\t\t[CFR] Unable to construct projection matrix; disabling gradient projection.")
+                cfr_cfg.with_gradient_projection = False
+        else:
+            print("\t\t[CFR] No anchor prompts available; disabling gradient projection.")
+            cfr_cfg.with_gradient_projection = False
+
+    return cfr_cfg
+
 def main(args):
+    if isinstance(getattr(args, "lora_ft", None), dict):
+        args.lora_ft = Namespace(**args.lora_ft)
+    if isinstance(getattr(args, "cfr", None), dict):
+        args.cfr = Namespace(**args.cfr)
+
+    lora_cfg = getattr(args, "lora_ft", Namespace())
+    for key in [
+        "l1sp_weight",
+        "l2sp_weight",
+        "selft_loss",
+        "selft_topk",
+        "selft_anchor",
+        "selft_grad_dict_path",
+        "selft_mask_dict_path",
+        "with_gradient_projection",
+        "gradient_projection_prompts",
+        "gradient_projection_num_prompts",
+        "gradient_projection_no_dual_domain",
+        "previously_unlearned",
+    ]:
+        if hasattr(lora_cfg, key):
+            setattr(args, key, getattr(lora_cfg, key))
+
     logging_dir = Path(args.output_dir, args.logging_dir)
 
     accelerator = Accelerator(
@@ -446,10 +575,17 @@ def main(args):
 
     # Setup continual enhancements
     setup_continual_enhancement(args, unet, text_encoder, tokenizer, accelerator.device)
+    cfr_cfg = setup_cfr_controls(args, unet, text_encoder, tokenizer, accelerator.device)
 
     # stage 1: closed-form refinement
     print(f"Acquiring cross-attention outputs")
     projection_matrices, ca_layers, og_matrices = get_ca_layers(unet, with_to_k=True)
+    param_name_map = {id(param): name for name, param in unet.named_parameters()}
+    projection_weight_names_initial = [param_name_map.get(id(layer.weight), None) for layer in projection_matrices]
+    baseline_weight_map = {}
+    for name, layer in zip(projection_weight_names_initial, projection_matrices):
+        if name is not None:
+            baseline_weight_map[name] = layer.weight.detach().clone()
     
     # to save memory
     CFR_dict = {}
@@ -459,6 +595,7 @@ def main(args):
         for layer_num in tqdm(range(len(projection_matrices))):
             CFR_dict[f'{layer_num}_for_mat1'] = None
             CFR_dict[f'{layer_num}_for_mat2'] = None
+            CFR_dict[f'{layer_num}_values_norm'] = None
             
         for i in tqdm(range(0, len(train_dataset.dict_for_close_form), max_concept_num)):
             contexts_sub, valuess_sub = prepare_k_v(text_encoder, projection_matrices, ca_layers, og_matrices, 
@@ -473,6 +610,7 @@ def main(args):
         for layer_num in tqdm(range(len(projection_matrices))):
             CFR_dict[f'{layer_num}_for_mat1'] = .0
             CFR_dict[f'{layer_num}_for_mat2'] = .0
+            CFR_dict[f'{layer_num}_values_norm'] = .0
             
         contexts, valuess = prepare_k_v(text_encoder, projection_matrices, ca_layers, og_matrices, 
                                         train_dataset.dict_for_close_form, tokenizer, all_words=args.all_words)
@@ -482,20 +620,34 @@ def main(args):
     # Load cached prior knowledge for preserving
     if args.prior_preservation_cache_path:
         prior_preservation_cache_dict = torch.load(args.prior_preservation_cache_path, map_location=projection_matrices[0].weight.device)
+        for layer_num in range(len(projection_matrices)):
+            norm_key = f'{layer_num}_values_norm'
+            if norm_key not in prior_preservation_cache_dict:
+                prior_preservation_cache_dict[norm_key] = torch.tensor(
+                    0.0, device=projection_matrices[0].weight.device, dtype=projection_matrices[0].weight.dtype
+                )
     else:
         prior_preservation_cache_dict = {}
         for layer_num in tqdm(range(len(projection_matrices))):
             prior_preservation_cache_dict[f'{layer_num}_for_mat1'] = .0
             prior_preservation_cache_dict[f'{layer_num}_for_mat2'] = .0
+            prior_preservation_cache_dict[f'{layer_num}_values_norm'] = .0
             
     # Load cached domain knowledge for preserving
     if args.domain_preservation_cache_path:
         domain_preservation_cache_dict = torch.load(args.domain_preservation_cache_path, map_location=projection_matrices[0].weight.device)
+        for layer_num in range(len(projection_matrices)):
+            norm_key = f'{layer_num}_values_norm'
+            if norm_key not in domain_preservation_cache_dict:
+                domain_preservation_cache_dict[norm_key] = torch.tensor(
+                    0.0, device=projection_matrices[0].weight.device, dtype=projection_matrices[0].weight.dtype
+                )
     else:
         domain_preservation_cache_dict = {}
         for layer_num in tqdm(range(len(projection_matrices))):
             domain_preservation_cache_dict[f'{layer_num}_for_mat1'] = .0
             domain_preservation_cache_dict[f'{layer_num}_for_mat2'] = .0
+            domain_preservation_cache_dict[f'{layer_num}_values_norm'] = .0
     
     # integrate the prior knowledge, domain knowledge and closed-form refinement
     cache_dict = {}
@@ -506,16 +658,43 @@ def main(args):
     
     # closed-form refinement
     projection_matrices, _, _ = get_ca_layers(unet, with_to_k=True)
+    param_name_map = {id(param): name for name, param in unet.named_parameters()}
+    projection_weight_names_final = [param_name_map.get(id(layer.weight), None) for layer in projection_matrices]
+    projection_matrix_for_cfr = cfr_cfg.projection_matrix if getattr(cfr_cfg, "with_gradient_projection", False) else None
+    selft_masks = getattr(cfr_cfg, "selft_mask_dict", None)
     
     if len(train_dataset.dict_for_close_form) > max_concept_num:
-        closed_form_refinement(projection_matrices, lamb=args.lamb, preserve_scale=1, cache_dict=cache_dict)
+        closed_form_refinement(
+            projection_matrices,
+            lamb=args.lamb,
+            preserve_scale=1,
+            cache_dict=cache_dict,
+            cfr_args=cfr_cfg,
+            original_weights=baseline_weight_map,
+            weight_names=projection_weight_names_final,
+            selft_masks=selft_masks,
+            projection_matrix=projection_matrix_for_cfr,
+        )
     else:
         print(f"Starting closed-form refinement...")
         print(f"Using lambda: '{args.lamb}', preserve_scale: '{args.train_preserve_scale}'")
-        closed_form_refinement(projection_matrices, contexts, valuess, lamb=args.lamb, 
-                               preserve_scale=args.train_preserve_scale, cache_dict=cache_dict)
+        closed_form_refinement(
+            projection_matrices,
+            contexts,
+            valuess,
+            lamb=args.lamb,
+            preserve_scale=args.train_preserve_scale,
+            cache_dict=cache_dict,
+            cfr_args=cfr_cfg,
+            original_weights=baseline_weight_map,
+            weight_names=projection_weight_names_final,
+            selft_masks=selft_masks,
+            projection_matrix=projection_matrix_for_cfr,
+        )
     
-    del contexts, valuess, cache_dict
+    if 'contexts' in locals():
+        del contexts, valuess
+    del cache_dict
     gc.collect()
     torch.cuda.empty_cache()
     

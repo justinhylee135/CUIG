@@ -9,12 +9,34 @@ from src.fuse_lora_close_form import main as multi_lora_fusion
 from inference import main as inference
 
 
+def _to_namespace(obj):
+    if isinstance(obj, dict):
+        ns = Namespace()
+        for key, value in obj.items():
+            setattr(ns, key, _to_namespace(value))
+        return ns
+    if isinstance(obj, list):
+        return [_to_namespace(item) for item in obj]
+    return obj
+
+
 def main(conf):
     
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
     # Convert OmegaConf to Namespace to allow storing tensors
-    mace_conf = Namespace(**OmegaConf.to_container(conf.MACE, resolve=True))
+    mace_conf_dict = OmegaConf.to_container(conf.MACE, resolve=True)
+    mace_conf = _to_namespace(mace_conf_dict)
+
+    # Ensure stage-specific configs exist
+    if not hasattr(mace_conf, "lora_ft") or mace_conf.lora_ft is None:
+        mace_conf.lora_ft = Namespace()
+    if not hasattr(mace_conf, "cfr") or mace_conf.cfr is None:
+        mace_conf.cfr = Namespace()
+
+    # For backward compatibility, surface LoRA FT hyperparameters at top level
+    for key, value in vars(mace_conf.lora_ft).items():
+        setattr(mace_conf, key, value)
     
     # stage 1 & 2 (CFR and LoRA training)
     cfr_lora_training(mace_conf)

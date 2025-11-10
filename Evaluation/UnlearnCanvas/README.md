@@ -25,9 +25,9 @@ python sample.py \
 ```
 ```bash
 python sample.py \
-    --unet_ckpt_path "/fs/scratch/PAS2099/lee.10369/CUIG/mace/models/continual/l1sp/100/style/steps50_lr1e5/thruByzantine/LoRA_fusion_model/unet/diffusion_pytorch_model.safetensors" \
-    --output_dir "$OUTPUT_ROOT/mace/eval_results/continual/l1sp/100/style/steps50_lr1e5/thruByzantine/images" \
-    --styles_subset '["Abstractionism", "Byzantine", "Blossom_Season", "Rust", "Crayon", "Fauvism", "Superstring", "Red_Blue_Ink", "Gorgeous_Love", "French", "Joy", "Greenfield", "Expressionism", "Impressionism"]' \
+    --unet_ckpt_path "/fs/scratch/PAS2099/lee.10369/CUIG/mace/models/continual/grad_proj/100/style/steps50_lr1e5/thruByzantine/LoRA_fusion_model/unet/diffusion_pytorch_model.safetensors" \
+    --output_dir "$OUTPUT_ROOT/mace/eval_results/continual/grad_proj/100/style/steps50_lr1e5/thruByzantine_1e1/images" \
+    --styles_subset '["Byzantine", "Blossom_Season", "Rust", "Crayon", "Fauvism", "Superstring", "Red_Blue_Ink", "Gorgeous_Love", "French", "Joy", "Greenfield", "Expressionism", "Impressionism"]' \
     --objects_subset '["Architectures", "Butterfly", "Flame", "Flowers", "Horses", "Human", "Sea", "Trees"]' \
     --pipeline_dir $BASE_MODEL_DIR \
     --seed 188
@@ -65,10 +65,10 @@ python evaluate.py \
 ```
 ```bash
 python evaluate.py \
-    --input_dir $OUTPUT_ROOT/mace/eval_results/continual/l1sp/100/style/steps50_lr1e5/thruByzantine/images \
-    --output_dir $OUTPUT_ROOT/mace/eval_results/continual/l1sp/100/style/steps50_lr1e5/thruByzantine/metrics \
+    --input_dir $OUTPUT_ROOT/mace/eval_results/continual/grad_proj/100/style/steps50_lr1e5/thruByzantine_1e1/images \
+    --output_dir $OUTPUT_ROOT/mace/eval_results/continual/grad_proj/100/style/steps50_lr1e5/thruByzantine_1e1/metrics \
     --classifier_dir $REPO_ROOT/Evaluation/UnlearnCanvas/classifiers \
-    --unlearn '["Abstractionism", "Byzantine"]' \
+    --unlearn '["Byzantine"]' \
     --cross_retain '["Architectures", "Butterfly", "Flame", "Flowers", "Horses", "Human", "Sea", "Trees"]' \
     --retain '["Blossom_Season", "Rust", "Crayon", "Fauvism", "Superstring", "Red_Blue_Ink", "Gorgeous_Love", "French", "Joy", "Greenfield", "Expressionism", "Impressionism"]' \
     --seed 188

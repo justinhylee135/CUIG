@@ -15,7 +15,7 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..
 sys.path.append(project_root)
 
 ## Utils
-from alt_utils import esd_sd_call
+from esd_utils import esd_sd_call
 StableDiffusionPipeline.__call__ = esd_sd_call
 
 ## Continual Enhancements
@@ -113,7 +113,7 @@ if __name__ == '__main__':
     
     # Training
     parser.add_argument('--train_method', help='Parameter Update Group', type=str, required=True, choices=['esd-x', 'esd-u', 'esd-all', 'esd-x-strict'])
-    parser.add_argument('--iterations', help='Number of iterations', type=int, default=200)
+    parser.add_argument('--iterations', help='Number of iterations', type=int, default=100)
     parser.add_argument('--lr', help='Learning rate', type=float, default=None)
     parser.add_argument('--save_path', help='Path to save model', type=str, default='esd-models/sd/')
     parser.add_argument('--base_model_dir', help='Base model to use', type=str, default='CompVis/stable-diffusion-v1-4')
@@ -217,10 +217,13 @@ if __name__ == '__main__':
         if not os.path.exists(unet_ckpt_path):
             print(f"UNet checkpoint not found at '{unet_ckpt_path}'. Using default UNet from pipeline '{base_model_dir}'...")
         else:
-            state_dict = torch.load(unet_ckpt_path, map_location=device)
-            base_unet.load_state_dict(state_dict, strict=False)
-            esd_unet.load_state_dict(state_dict, strict=False)
+            state_dict = torch.load(unet_ckpt_path, map_location="cpu")
+            base_missing, base_unexpected = base_unet.load_state_dict(state_dict, strict=False)
+            esd_missing, esd_unexpected = esd_unet.load_state_dict(state_dict, strict=False)
             print(f"Loaded Continual UNet Ckpt from {unet_ckpt_path}")
+            if base_missing or base_unexpected or esd_missing or esd_unexpected:
+                print(f"\tBase UNet missing {len(base_missing)} / unexpected {len(base_unexpected)}")
+                print(f"\tESD UNet missing {len(esd_missing)} / unexpected {len(esd_unexpected)}")
     
     # Set Progress Bar and Scheduler
     pipe.set_progress_bar_config(disable=True)
@@ -516,12 +519,12 @@ if __name__ == '__main__':
         print(f"Removed {len(grad_hooks)} SelFT gradient hook(s)")
 
     # Save updated ESD UNet parameters
-    esd_param_dict = {}
-    for name, param in zip(esd_param_names, esd_params):
-        esd_param_dict[name] = param
-    if erase_concept_from is None:
-        erase_concept_from = erase_concept
+    print(f"\nSaving full UNet checkpoint to '{save_path}'")
+    esd_state_dict = {
+        name: param.detach().to("cpu")
+        for name, param in esd_unet.state_dict().items()
+    }
     if ".safetensors" in save_path:
-        save_file(esd_param_dict, save_path)
+        save_file(esd_state_dict, save_path)
     else:
-        torch.save(esd_param_dict, save_path)
+        torch.save(esd_state_dict, save_path)

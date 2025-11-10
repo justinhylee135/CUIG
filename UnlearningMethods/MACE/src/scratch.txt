@@ -1,18 +1,5 @@
 source /users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/MACE/mace_exports.sh
 
-# Continual: step 2 + Grad Proj
-python training.py \
-configs/style/StyleUC.yaml \
-MACE.output_dir="./saved_model/Byzantine_Proj/CFR_with_multi_LoRAs" \
-MACE.final_save_path="./saved_model/Byzantine_Proj/LoRA_fusion_model" \
-MACE.unet_ckpt="/users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/MACE/saved_model/Abstractionism_Proj/LoRA_fusion_model/unet/diffusion_pytorch_model.safetensors" \
-MACE.with_gradient_projection=true \
-MACE.gradient_projection_prompts="/users/PAS2099/justinhylee135/Research/UnlearningDM/CUIG/UnlearningMethods/MACE/saved_model/Byzantine_20prompts.txt" \
-MACE.gradient_projection_num_prompts=20 \
-MACE.rank=768 \
-MACE.multi_concept="[[['Byzantine', 'style']]]" \
-MACE.learning_rate="2.0e-06"
-
 # Continual: step 2
 python training.py \
     configs/style/StyleUC.yaml \
@@ -24,15 +11,36 @@ python training.py \
     MACE.lamb=100 \
     MACE.l1sp_weight=100
 
+
+# Continual: step 2 + Grad Proj
+python training.py \
+    configs/style/StyleUC.yaml \
+    MACE.output_dir="/fs/scratch/PAS2099/lee.10369/CUIG/mace/models/continual/grad_proj/100/style/steps50_lr1e5/thruByzantine/CFR_with_multi_LoRAs" \
+    MACE.final_save_path="/fs/scratch/PAS2099/lee.10369/CUIG/mace/models/continual/grad_proj/100/style/steps50_lr1e5/thruByzantine/LoRA_fusion_model" \
+    MACE.unet_ckpt="/fs/scratch/PAS2099/lee.10369/CUIG/mace/models/continual/grad_proj/100/style/steps50_lr1e5/thruAbstractionism/LoRA_fusion_model/unet/diffusion_pytorch_model.safetensors" \
+    MACE.multi_concept="[[['Byzantine', 'style']]]" \
+    MACE.max_train_steps=50 \
+    MACE.lamb=100 \
+    MACE.cfr.with_gradient_projection=true \
+    MACE.cfr.gradient_projection_num_prompts=20 \
+    MACE.cfr.gradient_projection_prompts=/fs/scratch/PAS2099/lee.10369/CUIG/mace/models/continual/grad_proj/100/style/steps50_lr1e5/thruByzantine/prompts.txt \
+    MACE.cfr.projection_max_iters=100 \
+    MACE.cfr.projection_convergence_tol=1e-1
+
+
 # Continual: step 1
 python training.py \
     configs/style/StyleUC.yaml \
-    MACE.output_dir="/fs/scratch/PAS2099/lee.10369/CUIG/mace/models/continual/l1sp/100/style/steps50_lr1e5_lamb100/thruAbstractionism/CFR_with_multi_LoRAs" \
-    MACE.final_save_path="/fs/scratch/PAS2099/lee.10369/CUIG/mace/models/continual/l1sp/100/style/steps50_lr1e5_lamb100/thruAbstractionism/LoRA_fusion_model" \
+    MACE.output_dir="/fs/scratch/PAS2099/lee.10369/CUIG/mace/models/continual/grad_proj/100/style/steps50_lr1e5/thruAbstractionism/CFR_with_multi_LoRAs" \
+    MACE.final_save_path="/fs/scratch/PAS2099/lee.10369/CUIG/mace/models/continual/grad_proj/100/style/steps50_lr1e5/thruAbstractionism/LoRA_fusion_model" \
     MACE.multi_concept="[[['Abstractionism', 'style']]]" \
     MACE.max_train_steps=50 \
     MACE.lamb=100 \
-    MACE.l1sp_weight=100
+    MACE.cfr.with_gradient_projection=true \
+    MACE.cfr.gradient_projection_num_prompts=20 \
+    MACE.cfr.gradient_projection_prompts=/fs/scratch/PAS2099/lee.10369/CUIG/mace/models/continual/grad_proj/100/style/steps50_lr1e5/thruAbstractionism/prompts.txt \
+    MACE.cfr.projection_max_iters=100 \
+    MACE.cfr.projection_convergence_tol=1e-1
 
 python training.py \
 configs/style/StyleUC.yaml \
