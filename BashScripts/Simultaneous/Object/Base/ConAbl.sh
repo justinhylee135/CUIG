@@ -1,0 +1,221 @@
+#!/bin/bash
+
+set -euo pipefail
+
+echo "Simultaneous Object Unlearning with Base ConAbl starting..."
+
+# User must set
+REPO_ROOT="${REPO_ROOT:-$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-${REPO_ROOT}/outputs}"
+
+# Unlearning Method Agnostic
+base_model_dir="${REPO_ROOT}/Checkpoints/Generators/UnlearnCanvas"
+eval_classifier_dir="${REPO_ROOT}/Checkpoints/Classifiers/UnlearnCanvas"
+
+# Select Unlearning Method and Evaluation Method
+train_dir="${REPO_ROOT}/UnlearningMethods/ConAbl"
+eval_dir="${REPO_ROOT}/Evaluation/UnlearnCanvas"
+
+# ConAbl Specific
+accelerate_config="${REPO_ROOT}/Configs/Accelerator/single_gpu.yaml"
+anchor_datasets_root="${REPO_ROOT}/UnlearningMethods/ConAbl/anchor_datasets/object"
+anchor_prompts_root="${REPO_ROOT}/UnlearningMethods/ConAbl/anchor_prompts/object"
+models_root="${OUTPUT_ROOT}/Simultaneous/Object/Base/ConAbl/Models"
+results_root="${OUTPUT_ROOT}/Simultaneous/Object/Base/ConAbl/Results"
+logs_root="${REPO_ROOT}/logs/Simultaneous/Object/Base"
+
+array_to_json() {
+    local json="["
+    local item
+
+    for item in "$@"; do
+        json+="\"${item}\","
+    done
+
+    printf '%s' "${json%,}]"
+}
+
+# Define the list of objects to unlearn simultaneously
+unlearn_objects=("Bears" "Birds" "Cats" "Dogs" "Fishes" "Frogs" "Jellyfish" "Rabbits" "Sandwiches" "Statues" "Towers" "Waterfalls")
+
+# Define held-out objects and styles to measure retention performance
+retain_objects=("Architectures" "Butterfly" "Flame" "Flowers" "Horses" "Human" "Sea" "Trees")
+retain_styles=("Blossom_Season" "Rust" "Crayon" "Fauvism" "Superstring" "Red_Blue_Ink" "Gorgeous_Love" "French" "Joy" "Greenfield" "Expressionism" "Impressionism")
+
+# Map each target object to the anchor concept and singular text form used by ConAbl.
+declare -A object_anchor=(
+    ["Bears"]="Horses"
+    ["Birds"]="Butterfly"
+    ["Cats"]="Horses"
+    ["Dogs"]="Horses"
+    ["Fishes"]="Butterfly"
+    ["Frogs"]="Butterfly"
+    ["Jellyfish"]="Flowers"
+    ["Rabbits"]="Horses"
+    ["Sandwiches"]="Flowers"
+    ["Statues"]="Trees"
+    ["Towers"]="Trees"
+    ["Waterfalls"]="Trees"
+)
+declare -A object_name_map=(
+    ["Bears"]="bear"
+    ["Birds"]="bird"
+    ["Cats"]="cat"
+    ["Dogs"]="dog"
+    ["Fishes"]="fish"
+    ["Frogs"]="frog"
+    ["Jellyfish"]="jellyfish"
+    ["Rabbits"]="rabbit"
+    ["Sandwiches"]="sandwich"
+    ["Statues"]="statue"
+    ["Towers"]="tower"
+    ["Waterfalls"]="waterfall"
+)
+declare -A anchor_name_map=(
+    ["Butterfly"]="butterfly"
+    ["Flowers"]="flower"
+    ["Horses"]="horse"
+    ["Trees"]="tree"
+)
+
+retain_objects_json="$(array_to_json "${retain_objects[@]}")"
+retain_styles_json="$(array_to_json "${retain_styles[@]}")"
+
+# Keep track of the cumulative objects to unlearn
+unlearned=()
+unlearned_targets=()
+unlearned_anchor_dataset_dirs=()
+unlearned_anchor_prompt_paths=()
+
+# Submit one simultaneous job per cumulative object prefix
+for object in "${unlearn_objects[@]}"; do
+    anchor="${object_anchor[$object]:-}"
+    object_name="${object_name_map[$object]:-}"
+    anchor_name="${anchor_name_map[$anchor]:-}"
+    if [[ -z "${anchor}" || -z "${object_name}" || -z "${anchor_name}" ]]; then
+        echo "Missing mapping for object: ${object}" >&2
+        exit 1
+    fi
+
+    unlearned+=("${object}")
+    unlearned_targets+=("${anchor_name}+${object_name}")
+    unlearned_anchor_dataset_dirs+=("${anchor_datasets_root}/${anchor}")
+    unlearned_anchor_prompt_paths+=("${anchor_prompts_root}/${anchor}.txt")
+    unlearned_json="$(array_to_json "${unlearned[@]}")"
+    unlearned_target_json="$(array_to_json "${unlearned_targets[@]}")"
+    unlearned_anchor_dataset_dirs_json="$(array_to_json "${unlearned_anchor_dataset_dirs[@]}")"
+    unlearned_anchor_prompt_paths_json="$(array_to_json "${unlearned_anchor_prompt_paths[@]}")"
+    inner_unlearned=${unlearned_json:1:-1}
+    objects_subset_json="[${inner_unlearned}, ${retain_objects_json:1}"
+
+    echo "Submitting cumulative object set through: ${object}"
+    echo "Objects Unlearned so far: ${unlearned_json}"
+    echo "Objects subset for sampling: ${objects_subset_json}"
+
+    output_dir="${models_root}/thru${object}"
+    result_dir="${results_root}/thru${object}"
+    sample_output_dir="${result_dir}/images"
+    metrics_output_dir="${result_dir}/metrics"
+    job_file="$(mktemp "/tmp/conabl_simultaneous_object_${object}_XXXXXX.sh")"
+
+    cat > "${job_file}" <<EOF
+#!/bin/bash
+#SBATCH --account=YOUR_ACCOUNT
+#SBATCH --job-name=Simultaneous-Object-Base-ConAbl-thru${object}
+#SBATCH --time=30:00:00
+#SBATCH --cluster=ascend
+#SBATCH --partition=nextgen
+#SBATCH --nodes=1
+#SBATCH --gpus-per-node=1
+#SBATCH --cpus-per-task=4
+#SBATCH --ntasks-per-node=1
+#SBATCH --output=${logs_root}/ConAbl_thru${object}_%j.out
+#SBATCH --error=${logs_root}/ConAbl_thru${object}_%j.err
+
+# Script settings
+source ~/.bashrc
+set -euo pipefail
+
+echo "Simultaneous Object Unlearning with Base ConAbl starting through object: ${object}..."
+
+# User must set
+REPO_ROOT="${REPO_ROOT}"
+OUTPUT_ROOT="${OUTPUT_ROOT}"
+
+# Run (your own) script that activates the conda env and sets env variables
+source "\${REPO_ROOT}/private_exports.sh"
+
+# Unlearning Method Agnostic
+base_model_dir="${base_model_dir}"
+eval_classifier_dir="${eval_classifier_dir}"
+
+# Select Unlearning Method and Evaluation Method
+train_dir="${train_dir}"
+eval_dir="${eval_dir}"
+
+# ConAbl Specific
+accelerate_config="${accelerate_config}"
+output_dir="${output_dir}"
+sample_output_dir="${sample_output_dir}"
+metrics_output_dir="${metrics_output_dir}"
+unlearned_json='${unlearned_json}'
+unlearned_target_json='${unlearned_target_json}'
+unlearned_anchor_dataset_dirs_json='${unlearned_anchor_dataset_dirs_json}'
+unlearned_anchor_prompt_paths_json='${unlearned_anchor_prompt_paths_json}'
+retain_objects_json='${retain_objects_json}'
+retain_styles_json='${retain_styles_json}'
+objects_subset_json='${objects_subset_json}'
+
+# TRAIN: Unlearn the cumulative object set from the base model
+cd "\${train_dir}"
+train_args=(
+    --anchor_target_concepts "\${unlearned_target_json}"
+    --concept_type "object"
+    --output_dir "\${output_dir}"
+    --base_model_dir "\${base_model_dir}"
+    --iterations 4000
+    --num_anchor_images 200
+    --num_anchor_prompts 200
+    --anchor_dataset_dirs "\${unlearned_anchor_dataset_dirs_json}"
+    --anchor_prompt_paths "\${unlearned_anchor_prompt_paths_json}"
+    --scale_lr
+    --hflip
+    --noaug
+    --enable_xformers_memory_efficient_attention
+    --eval_interval 100
+    --patience 1000
+    --eval_classifier_dir "\${eval_classifier_dir}"
+    --overwrite_existing_ckpt
+)
+
+accelerate launch \
+    --config_file "\${accelerate_config}" \
+    train_conabl.py \
+    "\${train_args[@]}"
+
+# SAMPLE: Generate images from the current simultaneously unlearned model
+cd "\${eval_dir}"
+python sample.py \
+    --unet_ckpt_path "\${output_dir}/delta.bin" \
+    --output_dir "\${sample_output_dir}" \
+    --objects_subset "\${objects_subset_json}" \
+    --styles_subset "\${retain_styles_json}" \
+    --pipeline_dir "\${base_model_dir}"
+
+# EVALUATE: Run evaluation on the generated images.
+python evaluate.py \
+    --input_dir "\${sample_output_dir}" \
+    --output_dir "\${metrics_output_dir}" \
+    --eval_classifier_dir "\${eval_classifier_dir}" \
+    --unlearn "\${unlearned_json}" \
+    --retain "\${retain_objects_json}" \
+    --cross_retain "\${retain_styles_json}"
+
+echo "Completed Unlearning and Sampling through Object: ${object}"
+EOF
+
+    sbatch "${job_file}"
+    rm "${job_file}"
+done
+
+echo "Simultaneous Object Unlearning with Base ConAbl submission finished!"
