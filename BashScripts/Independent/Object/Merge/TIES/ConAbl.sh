@@ -25,7 +25,7 @@ merge_objects=("Bears" "Birds" "Cats" "Dogs" "Fishes" "Frogs" "Jellyfish" "Rabbi
 retain_objects=("Architectures" "Butterfly" "Flame" "Flowers" "Horses" "Human" "Sea" "Trees")
 retain_styles=("Blossom_Season" "Rust" "Crayon" "Fauvism" "Superstring" "Red_Blue_Ink" "Gorgeous_Love" "French" "Joy" "Greenfield" "Expressionism" "Impressionism")
 
-# Per-style TIES hyperparameters (best settings we found) for each cumulative merge endpoint.
+# Per-style TIES hyperparameters (best settings we found while maintaing UA as close to 99% as possible) for each cumulative merge endpoint.
 # In our original experiments we did a hyperparameter sweep with lambda: [1.25, 1.75, 2.25, 2.75] and topk: [0.20, 0.40, 0.60, 0.80]
 declare -A object_ties_lambda=(
     ["Birds"]="1.25"
@@ -37,21 +37,21 @@ declare -A object_ties_lambda=(
     ["Rabbits"]="1.75"
     ["Sandwiches"]="2.25"
     ["Statues"]="2.25"
-    ["Towers"]="2.25"
-    ["Waterfalls"]="2.25"
+    ["Towers"]="2.75"
+    ["Waterfalls"]="2.75"
 )
 declare -A object_ties_top_k=(
     ["Birds"]="0.20"
     ["Cats"]="0.80"
-    ["Dogs"]="0.60"
+    ["Dogs"]="0.80"
     ["Fishes"]="0.40"
     ["Frogs"]="0.40"
     ["Jellyfish"]="0.60"
     ["Rabbits"]="0.60"
-    ["Sandwiches"]="0.60"
-    ["Statues"]="0.40"
-    ["Towers"]="0.40"
-    ["Waterfalls"]="0.40"
+    ["Sandwiches"]="0.80"
+    ["Statues"]="0.60"
+    ["Towers"]="0.80"
+    ["Waterfalls"]="0.80"
 )
 ties_merge_func="mean"
 merge_device="cpu"

@@ -25,29 +25,29 @@ merge_styles=("Abstractionism" "Byzantine" "Cartoon" "Cold_Warm" "Ukiyoe" "Van_G
 retain_styles=("Blossom_Season" "Rust" "Crayon" "Fauvism" "Superstring" "Red_Blue_Ink" "Gorgeous_Love" "French" "Joy" "Greenfield" "Expressionism" "Impressionism")
 retain_objects=("Architectures" "Butterfly" "Flame" "Flowers" "Horses" "Human" "Sea" "Trees")
 
-# Per-style TIES hyperparameters (best settings we found) for each cumulative merge endpoint.
+# Per-style TIES hyperparameters (best settings we found while maintaing UA as close to 99% as possible) for each cumulative merge endpoint.
 # In our original experiments we did a hyperparameter sweep with lambda: [1.25, 1.75, 2.25, 2.75] and topk: [0.20, 0.40, 0.60, 0.80]
 declare -A style_ties_lambda=(
     ["Byzantine"]="1.25"
     ["Cartoon"]="1.25"
-    ["Cold_Warm"]="1.50"
+    ["Cold_Warm"]="1.75"
     ["Ukiyoe"]="1.75"
-    ["Van_Gogh"]="2.00"
+    ["Van_Gogh"]="1.75"
     ["Neon_Lines"]="2.25"
-    ["Picasso"]="2.00"
-    ["On_Fire"]="2.75"
-    ["Magic_Cube"]="2.75"
+    ["Picasso"]="2.25"
+    ["On_Fire"]="2.25"
+    ["Magic_Cube"]="2.25"
     ["Winter"]="2.75"
     ["Vibrant_Flow"]="2.75"
 )
 declare -A style_ties_top_k=(
-    ["Byzantine"]="0.20"
-    ["Cartoon"]="0.20"
+    ["Byzantine"]="0.80"
+    ["Cartoon"]="0.40"
     ["Cold_Warm"]="0.80"
     ["Ukiyoe"]="0.40"
     ["Van_Gogh"]="0.40"
     ["Neon_Lines"]="0.40"
-    ["Picasso"]="0.40"
+    ["Picasso"]="0.80"
     ["On_Fire"]="0.60"
     ["Magic_Cube"]="0.40"
     ["Winter"]="0.40"
