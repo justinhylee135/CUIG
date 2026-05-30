@@ -4,6 +4,7 @@ import random
 from pathlib import Path
 import hashlib
 import math
+import fcntl
 from PIL import Image
 import ast
 
@@ -467,33 +468,50 @@ def generate_anchor_images_if_needed(args, accelerator, logger):
         # This subfolder will hold the anchor images
         image_dir = (Path(os.path.join(anchor_dataset_dir, "images")))
         os.makedirs(image_dir, exist_ok=True)
-        
-        # Time to generate the anchor images, but make sure they don't already exist
-        num_existing_class_images = len(list(image_dir.iterdir()))
-        print(f"\t{i+1}. '{concept_cfg['anchor_target_concept']}': '{num_existing_class_images}' anchor images already found at '{image_dir}'.")
-        if (
-            num_existing_class_images < args.num_anchor_images
-        ):  
-            # Define number of concepts to generate
-            num_to_generate = args.num_anchor_images - num_existing_class_images
-            print(f"Only '{num_existing_class_images}' class images found at '{image_dir}'. Generating '{num_to_generate}' more images...")
 
-            # Set up diffusion model pipeline
-            diffusion_pipeline = _setup_generation_pipeline(args, accelerator)
+        lock_file = None
+        lock_path = anchor_dataset_dir / ".anchor_generation.lock"
+        if accelerator.is_main_process:
+            lock_file = open(lock_path, "w")
+            print(f"\tWaiting for anchor dataset lock at '{lock_path}'.")
+            fcntl.flock(lock_file, fcntl.LOCK_EX)
+            print(f"\tAcquired anchor dataset lock at '{lock_path}'.")
 
-            # Collect anchor prompts in list (Generate if needed)
-            anchor_prompt_list = _get_anchor_prompts_list( 
-                args, concept_cfg, excluded_concepts_str, anchor_dataset_dir, diffusion_pipeline, accelerator
-            )
+        accelerator.wait_for_everyone()
+        try:
+            # Time to generate the anchor images, but make sure they don't already exist.
+            # Re-check this count after acquiring the lock so concurrent jobs do not duplicate work.
+            num_existing_class_images = len(list(image_dir.iterdir()))
+            print(f"\t{i+1}. '{concept_cfg['anchor_target_concept']}': '{num_existing_class_images}' anchor images already found at '{image_dir}'.")
+            if (
+                num_existing_class_images < args.num_anchor_images
+            ):
+                # Define number of concepts to generate
+                num_to_generate = args.num_anchor_images - num_existing_class_images
+                print(f"Only '{num_existing_class_images}' class images found at '{image_dir}'. Generating '{num_to_generate}' more images...")
 
-            # Generate and save anchor images
-            _generate_images_from_prompts(args, num_to_generate, anchor_prompt_list, anchor_dataset_dir, diffusion_pipeline, accelerator)
+                # Set up diffusion model pipeline
+                diffusion_pipeline = _setup_generation_pipeline(args, accelerator)
 
-            # Remove diffusion pipeline from memory
-            del diffusion_pipeline
-        else:
-            # Just print message that we're skipping anchor image generation
-            print(f"Skipping anchor image generation because already found '{num_existing_class_images}' images in '{image_dir}'")
+                # Collect anchor prompts in list (Generate if needed)
+                anchor_prompt_list = _get_anchor_prompts_list( 
+                    args, concept_cfg, excluded_concepts_str, anchor_dataset_dir, diffusion_pipeline, accelerator
+                )
+
+                # Generate and save anchor images
+                _generate_images_from_prompts(args, num_to_generate, anchor_prompt_list, anchor_dataset_dir, diffusion_pipeline, accelerator)
+
+                # Remove diffusion pipeline from memory
+                del diffusion_pipeline
+            else:
+                # Just print message that we're skipping anchor image generation
+                print(f"Skipping anchor image generation because already found '{num_existing_class_images}' images in '{image_dir}'")
+        finally:
+            accelerator.wait_for_everyone()
+            if accelerator.is_main_process and lock_file is not None:
+                fcntl.flock(lock_file, fcntl.LOCK_UN)
+                lock_file.close()
+                print(f"\tReleased anchor dataset lock at '{lock_path}'.")
 
         # Update concept config with new paths
         _update_concept_config_file_paths(concept_cfg, anchor_dataset_dir)

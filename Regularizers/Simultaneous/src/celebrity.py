@@ -137,6 +137,7 @@ def _save_sampling_checkpoint(diffusion_pipeline, output_dir, iteration, celeb_s
     # Save UNet Parameters
     if parameter_group != "text-emb" and hasattr(diffusion_pipeline, "unet"):
         diffusion_pipeline.unet.train()
+        checkpoint["unet"] = {}
 
         # Iterate through UNet parameters and save based on parameter_group
         for name, params in diffusion_pipeline.unet.named_parameters():

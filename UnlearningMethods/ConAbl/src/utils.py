@@ -642,7 +642,7 @@ def print_training_settings_summary(args, accelerator, anchor_dataloader, anchor
             if anchor_concept == "*":
                 print(f"\t{i+1}. Mapping target concept '{target_concept}' to anchor prompts in '{concept['anchor_prompt_path']}'.")
             else:
-                print(f"\t{i+1}. Mapping target concept '{target_concept}' to anchor concept'{anchor_concept}' via string replacement using prompts '{concept['anchor_prompt_path']}'.")
+                print(f"\t{i+1}. Mapping target concept '{target_concept}' to anchor concept '{anchor_concept}' via string replacement using prompts '{concept['anchor_prompt_path']}'.")
 
     # Compute actual batch size in optimization step
     total_batch_size = (

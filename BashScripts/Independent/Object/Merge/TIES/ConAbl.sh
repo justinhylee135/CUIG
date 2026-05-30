@@ -4,13 +4,17 @@ set -euo pipefail
 
 echo "Independent Object Merge TIES with ConAbl starting..."
 
-# User must set
-REPO_ROOT="${REPO_ROOT:-$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)}"
-OUTPUT_ROOT="${OUTPUT_ROOT:-${REPO_ROOT}/outputs}"
+# Shared configuration
+_cuig_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+while [[ ! -f "${_cuig_script_dir}/BashScripts/submit.sh" && "${_cuig_script_dir}" != "/" ]]; do
+    _cuig_script_dir="$(dirname "${_cuig_script_dir}")"
+done
+source "${_cuig_script_dir}/BashScripts/submit.sh"
+unset _cuig_script_dir
 
 # Shared paths
-base_model_dir="${REPO_ROOT}/Checkpoints/Generators/UnlearnCanvas"
-eval_classifier_dir="${REPO_ROOT}/Checkpoints/Classifiers/UnlearnCanvas"
+base_model_dir="${CUIG_UNLEARNCANVAS_GENERATOR_DIR}"
+eval_classifier_dir="${CUIG_UNLEARNCANVAS_CLASSIFIER_DIR}"
 merge_dir="${REPO_ROOT}/Regularizers/Merge"
 eval_dir="${REPO_ROOT}/Evaluation/UnlearnCanvas"
 source_models_root="${OUTPUT_ROOT}/Independent/Object/Base/ConAbl/Models"
@@ -106,7 +110,7 @@ for object in "${merge_objects[@]}"; do
     metrics_output_dir="${result_dir}/metrics"
     job_file="$(mktemp "/tmp/ties_independent_object_thru${object}_${experiment_tag}_XXXXXX.sh")"
 
-    mkdir -p "${job_logs_root}"
+    mkdir -p "${job_logs_root}/ConAbl"
 
     if [[ -d "${metrics_output_dir}" ]]; then
         echo "Skipping thru${object}; metrics already exist at ${metrics_output_dir}"
@@ -118,18 +122,18 @@ for object in "${merge_objects[@]}"; do
 
     cat > "${job_file}" <<EOF
 #!/bin/bash
-#SBATCH --account=YOUR_ACCOUNT
+#SBATCH --account=${CUIG_SLURM_ACCOUNT}
 #SBATCH --job-name=Independent-Object-Merge-TIES-ConAbl-thru${object}-${experiment_tag}
 #SBATCH --time=01:30:00
-#SBATCH --cluster=ascend
-#SBATCH --partition=nextgen
+#SBATCH --cluster=${CUIG_SLURM_CLUSTER}
+#SBATCH --partition=${CUIG_SLURM_PARTITION}
 #SBATCH --nodes=1
 #SBATCH --gpus-per-node=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=128G
 #SBATCH --ntasks-per-node=1
-#SBATCH --output=${job_logs_root}/ConAbl_%j.out
-#SBATCH --error=${job_logs_root}/ConAbl_%j.err
+#SBATCH --output=${job_logs_root}/ConAbl/%j.out
+#SBATCH --error=${job_logs_root}/ConAbl/%j.err
 
 source ~/.bashrc
 set -euo pipefail
@@ -152,7 +156,9 @@ objects_subset_json='${objects_subset_json}'
 checkpoints_json='${checkpoints_json}'
 key_filter_json='${key_filter_json}'
 
-source "\${REPO_ROOT}/private_exports.sh"
+if [[ -n "${CUIG_PRIVATE_EXPORTS:-}" && -f "${CUIG_PRIVATE_EXPORTS}" ]]; then
+    source "${CUIG_PRIVATE_EXPORTS}"
+fi
 
 # MERGE: Build one merged checkpoint from the independent ConAbl deltas.
 cd "\${merge_dir}"

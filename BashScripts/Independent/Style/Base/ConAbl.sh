@@ -4,13 +4,17 @@ set -euo pipefail
 
 echo "Independent Style Unlearning with Base ConAbl starting..."
 
-# User must set
-REPO_ROOT="${REPO_ROOT:-$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)}"
-OUTPUT_ROOT="${OUTPUT_ROOT:-${REPO_ROOT}/outputs}"
+# Shared configuration
+_cuig_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+while [[ ! -f "${_cuig_script_dir}/BashScripts/submit.sh" && "${_cuig_script_dir}" != "/" ]]; do
+    _cuig_script_dir="$(dirname "${_cuig_script_dir}")"
+done
+source "${_cuig_script_dir}/BashScripts/submit.sh"
+unset _cuig_script_dir
 
 # Unlearning Method Agnostic
-base_model_dir="${REPO_ROOT}/Checkpoints/Generators/UnlearnCanvas"
-eval_classifier_dir="${REPO_ROOT}/Checkpoints/Classifiers/UnlearnCanvas"
+base_model_dir="${CUIG_UNLEARNCANVAS_GENERATOR_DIR}"
+eval_classifier_dir="${CUIG_UNLEARNCANVAS_CLASSIFIER_DIR}"
 
 # Select Unlearning Method and Evaluation Method
 train_dir="${REPO_ROOT}/UnlearningMethods/ConAbl"
@@ -45,6 +49,8 @@ retain_objects=("Architectures" "Butterfly" "Flame" "Flowers" "Horses" "Human" "
 retain_styles_json="$(array_to_json "${retain_styles[@]}")"
 retain_objects_json="$(array_to_json "${retain_objects[@]}")"
 
+mkdir -p "${logs_root}/ConAbl"
+
 # Submit one independent job per style
 for style in "${unlearn_styles[@]}"; do
     echo "Submitting style: ${style}"
@@ -59,17 +65,17 @@ for style in "${unlearn_styles[@]}"; do
 
     cat > "${job_file}" <<EOF
 #!/bin/bash
-#SBATCH --account=YOUR_ACCOUNT
+#SBATCH --account=${CUIG_SLURM_ACCOUNT}
 #SBATCH --job-name=Independent-Style-Base-ConAbl-${style}
 #SBATCH --time=02:00:00
-#SBATCH --cluster=ascend
-#SBATCH --partition=nextgen
+#SBATCH --cluster=${CUIG_SLURM_CLUSTER}
+#SBATCH --partition=${CUIG_SLURM_PARTITION}
 #SBATCH --nodes=1
 #SBATCH --gpus-per-node=1
 #SBATCH --cpus-per-task=4
 #SBATCH --ntasks-per-node=1
-#SBATCH --output=${logs_root}/ConAbl_${style}_%j.out
-#SBATCH --error=${logs_root}/ConAbl_${style}_%j.err
+#SBATCH --output=${logs_root}/ConAbl/${style}_%j.out
+#SBATCH --error=${logs_root}/ConAbl/${style}_%j.err
 
 # Script Settings
 source ~/.bashrc
@@ -82,7 +88,9 @@ REPO_ROOT="${REPO_ROOT}"
 OUTPUT_ROOT="${OUTPUT_ROOT}"
 
 # Run (your own) script that activates the conda env and sets env variables
-source "${REPO_ROOT}/private_exports.sh"
+if [[ -n "${CUIG_PRIVATE_EXPORTS:-}" && -f "${CUIG_PRIVATE_EXPORTS}" ]]; then
+    source "${CUIG_PRIVATE_EXPORTS}"
+fi
 
 # Unlearning Method Agnostic
 base_model_dir="${base_model_dir}"

@@ -31,12 +31,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--prompts_csv",
-        default="prompts/ms_coco.csv",
+        default="ms_coco.csv",
         help="CSV file with prompts/case numbers used to generate the images.",
     )
     parser.add_argument(
         "--fid_stats_path",
-        default="prompts/ms_coco.npz",
+        default="ms_coco.npz",
         help="Path to the COCO FID statistics npz file (mu, sigma).",
     )
     parser.add_argument(

@@ -1,7 +1,15 @@
 private_exports.sh
+BashScripts/config.sh
 Checkpoints/Classifiers/*
 Checkpoints/Generators/*
 __pycache__
 BashScripts_personal
 logs
 anchor_datasets
+resources
+celeb-detection-oss
+images
+metrics
+prompts
+.locks
+ex_readme.md

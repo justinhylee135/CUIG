@@ -237,7 +237,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Path to CSV file with prompts",
         type=str,
         required=False,
-        default="prompts/ms_coco.csv",
+        default="ms_coco.csv",
     )
     parser.add_argument("--output_dir", help="Folder where to save images", type=str, required=True)
     parser.add_argument("--device", help="CUDA device to run on", type=str, required=False, default="cuda:0")
