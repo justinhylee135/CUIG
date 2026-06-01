@@ -1,8 +1,8 @@
 <div align="center">
 
-# CUIG
+# Continual Unlearning for Text-to-Image Diffusion Models: A Regularization Perspective
 
-### Continual Unlearning for Image Generation
+### Accepted at ICLR 2026 
 
 [![GitHub](https://img.shields.io/badge/GitHub-CUIG-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/justinhylee135/CUIG)
 [![Paper](https://img.shields.io/badge/Paper-arXiv-A42C25?style=for-the-badge&logo=arxiv&logoColor=white)](https://arxiv.org/pdf/2511.07970)
@@ -10,7 +10,7 @@
 
 </div>
 
-CUIG is a research codebase for studying concept unlearning in text-to-image diffusion models. The repository organizes unlearning methods, regularizers, evaluation suites, and end-to-end experiment scripts for independent, sequential, and simultaneous unlearning settings.
+**Continual Unlearning for Image Generation (CUIG)** is a research codebase for studying concept unlearning in text-to-image diffusion models. The repository organizes unlearning methods, regularizers, evaluation suites, and end-to-end experiment scripts for independent, sequential, and simultaneous unlearning settings.
 
 ## Table of Contents
 
