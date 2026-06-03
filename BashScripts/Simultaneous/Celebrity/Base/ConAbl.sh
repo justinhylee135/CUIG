@@ -77,7 +77,7 @@ declare -A celebrity_time_limit=(
     ["Benicio_Del_Toro"]="11:00:00"
     ["Aziz_Ansari"]="12:00:00"
     ["Oprah_Winfrey"]="13:00:00"
-    ["Betty_White"]="30:00:00"
+    ["Betty_White"]="40:00:00"
     ["Megan_Fox"]="45:00:00"
 )
 
@@ -264,12 +264,59 @@ for log_num in \$(seq "\${eval_interval}" "\${eval_interval}" "\${iterations}");
         --num_seeds "\${num_seeds}"
 done
 
+# Select the first sampled training checkpoint whose celebrity evaluation clears the UA threshold.
+if ! selected_checkpoint_info="\$(OUTPUT_DIR="\${output_dir}" EVAL_INTERVAL="\${eval_interval}" ITERATIONS="\${iterations}" python - <<'PY'
+import json
+import os
+import sys
+
+output_dir = os.environ["OUTPUT_DIR"]
+eval_interval = int(os.environ["EVAL_INTERVAL"])
+iterations = int(os.environ["ITERATIONS"])
+threshold = 0.9900
+
+for log_num in range(eval_interval, iterations + 1, eval_interval):
+    log_dir = os.path.join(output_dir, "logs", f"log_{log_num}")
+    metrics_dir = os.path.join(log_dir, "metrics")
+    results_path = None
+    for filename in ("results.json", "resu.lts.json"):
+        candidate = os.path.join(metrics_dir, filename)
+        if os.path.isfile(candidate):
+            results_path = candidate
+            break
+    if results_path is None:
+        continue
+
+    with open(results_path, "r") as handle:
+        avg_ua = float(json.load(handle).get("avg_ua", 0.0))
+
+    if avg_ua > threshold:
+        ckpt_path = os.path.join(log_dir, f"{log_num}.ckpt")
+        if not os.path.isfile(ckpt_path):
+            raise FileNotFoundError(f"Selected metrics file {results_path} but checkpoint is missing: {ckpt_path}")
+        print(f"{log_num} {ckpt_path}")
+        sys.exit(0)
+
+sys.exit(1)
+PY
+)"; then
+    echo "No sampled training checkpoint under \${output_dir}/logs has avg_ua > 0.9900." >&2
+    exit 1
+fi
+read -r selected_log_num selected_ckpt <<< "\${selected_checkpoint_info}"
+sample_output_dir="\${sample_output_dir}-log_\${selected_log_num}"
+metrics_output_dir="\${metrics_output_dir}-log_\${selected_log_num}"
+coco_images_dir="\${coco_images_dir}-log_\${selected_log_num}"
+coco_metrics_dir="\${coco_metrics_dir}-log_\${selected_log_num}"
+echo "Selected sampled training checkpoint for downstream sampling: \${selected_ckpt}"
+echo "Writing downstream outputs with suffix: -log_\${selected_log_num}"
+
 # SAMPLE: Generate images from the current simultaneously unlearned model.
 conda activate cuig
 cd "\${eval_dir}"
 python sample_celeb.py \
     --model_family sd \
-    --ckpt "\${output_dir}/delta.bin" \
+    --ckpt "\${selected_ckpt}" \
     --pipeline_dir "\${base_model_dir}" \
     --prompt_dir "\${prompt_dir}" \
     --output_dir "\${sample_output_dir}" \
@@ -297,7 +344,7 @@ if [[ "\${submit_coco}" == true ]]; then
     cd "\${eval_dir}/coco"
     python sample_coco.py \
         --model_family sd \
-        --model_name "\${output_dir}/delta.bin" \
+        --model_name "\${selected_ckpt}" \
         --pipeline_dir "\${base_model_dir}" \
         --output_dir "\${coco_images_dir}" \
         --num_prompts "\${coco_num_prompts}"
