@@ -2,6 +2,8 @@
 
 This directory contains utilities to sample images and evaluate copyrighted character unlearning.
 
+The character evaluation setup uses resources from [Six-CD](https://github.com/Artanisax/Six-CD/tree/main). Please credit the Six-CD authors when using this evaluation pipeline or checkpoint.
+
 ## Setup
 
 Start from the character evaluation directory:

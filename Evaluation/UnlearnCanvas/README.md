@@ -2,6 +2,8 @@
 
 This folder contains the sampling and classifier-based evaluation utilities for the UnlearnCanvas benchmark. UnlearnCanvas evaluates whether a model forgets target artistic styles or object concepts while retaining performance on related in-domain concepts and cross-domain concepts.
 
+The style/object evaluation setup uses resources from [UnlearnCanvas](https://github.com/OPTML-Group/UnlearnCanvas). Please credit the UnlearnCanvas authors when using this evaluation pipeline or checkpoint.
+
 ## Contents
 
 - `sample.py`: samples benchmark images from a Diffusers pipeline, optionally with an unlearned UNet checkpoint.

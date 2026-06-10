@@ -1,5 +1,7 @@
 # Celebrity Evaluation
 
+The celebrity evaluation setup uses resources from [GIPHY's Open-Source Celebrity Detection Deep Learning Model](https://github.com/Giphy/celeb-detection-oss).
+
 This directory contains utilities to sample celebrity images and evaluate identity unlearning. The workflow is:
 
 1. Generate or reuse prompts for each celebrity.
