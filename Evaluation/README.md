@@ -16,6 +16,7 @@ Evaluation/
 |-- Celebrity/       # Celebrity prompt generation, sampling, face-ID evaluation, and COCO retention
 |-- Character/       # Copyrighted character sampling and classifier evaluation
 |-- Nudity/          # Nudity benchmark sampling, detection, and COCO retention
+|-- DUGE/            # Object prompt sampling, ImageNet evaluation, and FID/KID
 `-- README.md
 ```
 
@@ -25,6 +26,7 @@ Detailed benchmark instructions live in the sub-folder READMEs:
 - [Celebrity](Celebrity/README.md)
 - [Character](Character/README.md)
 - [Nudity](Nudity/README.md)
+- [DUGE](DUGE/README.md)
 
 ## UnlearnCanvas
 
@@ -76,6 +78,17 @@ Nudity:
 - `nudity_benchmark.csv`
 
 See [`Character/README.md`](Character/README.md) for character checkpoint setup and evaluation commands. See [`Nudity/README.md`](Nudity/README.md) for NudeNet setup, nudity benchmark evaluation, and COCO retention commands.
+
+## DUGE
+
+[`DUGE/`](DUGE/README.md) evaluates object concept unlearning with ImageNet
+classification metrics and FID/KID folder comparisons.
+
+Main entrypoints:
+
+- `sample_duge.py`: samples object prompts from a Diffusers pipeline and optional UNet checkpoint.
+- `evaluate_imagenet.py`: reports object classification accuracy and unlearning accuracy.
+- `evaluate_fid_kid.py`: computes cleanfid FID and KID between generated and reference image folders.
 
 ## Output Conventions
 

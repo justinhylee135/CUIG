@@ -27,7 +27,7 @@ logs_root="${REPO_ROOT}/logs/Simultaneous/Celebrity/Base/ESD-SDXL"
 prompt_dir="${eval_dir}/Prompts"
 prompt_locks_dir="${prompt_dir}/.locks"
 eval_interval=10
-patience=200
+patience=300
 num_prompts=50
 num_seeds=1
 
@@ -62,12 +62,12 @@ unlearn_celebrities=("Neil_Degrasse_Tyson" "Benicio_Del_Toro" "Aziz_Ansari" "Opr
 
 # Per-cumulative-endpoint training budgets and SLURM wall times.
 declare -A celebrity_iterations=(
-    ["Neil_Degrasse_Tyson"]="200"
-    ["Benicio_Del_Toro"]="200"
-    ["Aziz_Ansari"]="200"
-    ["Oprah_Winfrey"]="200"
-    ["Betty_White"]="200"
-    ["Megan_Fox"]="200"
+    ["Neil_Degrasse_Tyson"]="300"
+    ["Benicio_Del_Toro"]="300"
+    ["Aziz_Ansari"]="300"
+    ["Oprah_Winfrey"]="300"
+    ["Betty_White"]="300"
+    ["Megan_Fox"]="300"
 )
 declare -A celebrity_time_limit=(
     ["Neil_Degrasse_Tyson"]="10:00:00"

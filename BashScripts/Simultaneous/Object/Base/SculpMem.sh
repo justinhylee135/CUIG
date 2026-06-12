@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-echo "Simultaneous Style Unlearning with Base ConAbl starting..."
+echo "Simultaneous Object Unlearning with Base SculpMem starting..."
 
 # Shared configuration
 _cuig_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,19 +17,19 @@ base_model_dir="${CUIG_UNLEARNCANVAS_GENERATOR_DIR}"
 eval_classifier_dir="${CUIG_UNLEARNCANVAS_CLASSIFIER_DIR}"
 
 # Select Unlearning Method and Evaluation Method
-train_dir="${REPO_ROOT}/UnlearningMethods/ConAbl"
+train_dir="${REPO_ROOT}/UnlearningMethods/SculpMem"
 eval_dir="${REPO_ROOT}/Evaluation/UnlearnCanvas"
 
-# ConAbl Specific
+# SculpMem Specific
 accelerate_config="${REPO_ROOT}/Configs/Accelerator/single_gpu.yaml"
-anchor_dataset_dir="${REPO_ROOT}/UnlearningMethods/ConAbl/anchor_datasets/style/Laion"
-anchor_prompt_path="${REPO_ROOT}/UnlearningMethods/ConAbl/anchor_prompts/style/Laion.txt"
-models_root="${OUTPUT_ROOT}/Simultaneous/Style/Base/ConAbl/Models"
-results_root="${OUTPUT_ROOT}/Simultaneous/Style/Base/ConAbl/Results"
-logs_root="${REPO_ROOT}/logs/Simultaneous/Style/Base"
-iterations=4000
+anchor_datasets_root="${REPO_ROOT}/UnlearningMethods/SculpMem/anchor_datasets/object"
+anchor_prompts_root="${REPO_ROOT}/UnlearningMethods/SculpMem/anchor_prompts/object"
+models_root="${OUTPUT_ROOT}/Simultaneous/Object/Base/SculpMem/Models"
+results_root="${OUTPUT_ROOT}/Simultaneous/Object/Base/SculpMem/Results"
+logs_root="${REPO_ROOT}/logs/Simultaneous/Object/Base"
+iterations=8000
 eval_interval=100
-patience=1000
+patience=3000
 
 array_to_json() {
     local json="["
@@ -42,57 +42,110 @@ array_to_json() {
     printf '%s' "${json%,}]"
 }
 
-# Define the list of styles to unlearn simultaneously
-unlearn_styles=("Abstractionism" "Byzantine" "Cartoon" "Cold_Warm" "Ukiyoe" "Van_Gogh" "Neon_Lines" "Picasso" "On_Fire" "Magic_Cube" "Winter" "Vibrant_Flow")
+# Define the list of objects to unlearn simultaneously
+unlearn_objects=("Bears" "Birds" "Cats" "Dogs" "Fishes" "Frogs" "Jellyfish" "Rabbits" "Sandwiches" "Statues" "Towers" "Waterfalls")
 
-# Define held-out styles and objects to measure retention performance
-retain_styles=("Blossom_Season" "Rust" "Crayon" "Fauvism" "Superstring" "Red_Blue_Ink" "Gorgeous_Love" "French" "Joy" "Greenfield" "Expressionism" "Impressionism")
+# Define held-out objects and styles to measure retention performance
 retain_objects=("Architectures" "Butterfly" "Flame" "Flowers" "Horses" "Human" "Sea" "Trees")
+retain_styles=("Blossom_Season" "Rust" "Crayon" "Fauvism" "Superstring" "Red_Blue_Ink" "Gorgeous_Love" "French" "Joy" "Greenfield" "Expressionism" "Impressionism")
 
-retain_styles_json="$(array_to_json "${retain_styles[@]}")"
+# Map each target object to the anchor concept and singular text form used by SculpMem.
+declare -A object_anchor=(
+    ["Bears"]="Horses"
+    ["Birds"]="Butterfly"
+    ["Cats"]="Horses"
+    ["Dogs"]="Horses"
+    ["Fishes"]="Butterfly"
+    ["Frogs"]="Butterfly"
+    ["Jellyfish"]="Flowers"
+    ["Rabbits"]="Horses"
+    ["Sandwiches"]="Flowers"
+    ["Statues"]="Trees"
+    ["Towers"]="Trees"
+    ["Waterfalls"]="Trees"
+)
+declare -A object_name_map=(
+    ["Bears"]="bear"
+    ["Birds"]="bird"
+    ["Cats"]="cat"
+    ["Dogs"]="dog"
+    ["Fishes"]="fish"
+    ["Frogs"]="frog"
+    ["Jellyfish"]="jellyfish"
+    ["Rabbits"]="rabbit"
+    ["Sandwiches"]="sandwich"
+    ["Statues"]="statue"
+    ["Towers"]="tower"
+    ["Waterfalls"]="waterfall"
+)
+declare -A anchor_name_map=(
+    ["Butterfly"]="butterfly"
+    ["Flowers"]="flower"
+    ["Horses"]="horse"
+    ["Trees"]="tree"
+)
+
 retain_objects_json="$(array_to_json "${retain_objects[@]}")"
+retain_styles_json="$(array_to_json "${retain_styles[@]}")"
 
-mkdir -p "${logs_root}/ConAbl"
+mkdir -p "${logs_root}/SculpMem"
 
-# Keep track of the cumulative styles to unlearn
+# Keep track of the cumulative objects to unlearn
 unlearned=()
+unlearned_targets=()
+unlearned_anchor_dataset_dirs=()
+unlearned_anchor_prompt_paths=()
 
-# Submit one simultaneous job per cumulative style prefix
-for style in "${unlearn_styles[@]}"; do
-    unlearned+=("${style}")
+# Submit one simultaneous job per cumulative object prefix
+for object in "${unlearn_objects[@]}"; do
+    anchor="${object_anchor[$object]:-}"
+    object_name="${object_name_map[$object]:-}"
+    anchor_name="${anchor_name_map[$anchor]:-}"
+    if [[ -z "${anchor}" || -z "${object_name}" || -z "${anchor_name}" ]]; then
+        echo "Missing mapping for object: ${object}" >&2
+        exit 1
+    fi
+
+    unlearned+=("${object}")
+    unlearned_targets+=("${anchor_name}+${object_name}")
+    unlearned_anchor_dataset_dirs+=("${anchor_datasets_root}/${anchor}")
+    unlearned_anchor_prompt_paths+=("${anchor_prompts_root}/${anchor}.txt")
     unlearned_json="$(array_to_json "${unlearned[@]}")"
+    unlearned_target_json="$(array_to_json "${unlearned_targets[@]}")"
+    unlearned_anchor_dataset_dirs_json="$(array_to_json "${unlearned_anchor_dataset_dirs[@]}")"
+    unlearned_anchor_prompt_paths_json="$(array_to_json "${unlearned_anchor_prompt_paths[@]}")"
     inner_unlearned=${unlearned_json:1:-1}
-    styles_subset_json="[${inner_unlearned}, ${retain_styles_json:1}"
+    objects_subset_json="[${inner_unlearned}, ${retain_objects_json:1}"
 
-    echo "Submitting cumulative style set through: ${style}"
-    echo "Styles Unlearned so far: ${unlearned_json}"
-    echo "Styles subset for sampling: ${styles_subset_json}"
+    echo "Submitting cumulative object set through: ${object}"
+    echo "Objects Unlearned so far: ${unlearned_json}"
+    echo "Objects subset for sampling: ${objects_subset_json}"
 
-    output_dir="${models_root}/thru${style}"
-    result_dir="${results_root}/thru${style}"
+    output_dir="${models_root}/thru${object}"
+    result_dir="${results_root}/thru${object}"
     sample_output_dir="${result_dir}/images"
     metrics_output_dir="${result_dir}/metrics"
-    job_file="$(mktemp "/tmp/conabl_simultaneous_style_${style}_XXXXXX.sh")"
+    job_file="$(mktemp "/tmp/sculpmem_simultaneous_object_${object}_XXXXXX.sh")"
 
     cat > "${job_file}" <<EOF
 #!/bin/bash
 #SBATCH --account=${CUIG_SLURM_ACCOUNT}
-#SBATCH --job-name=Simultaneous-Style-Base-ConAbl-thru${style}
-#SBATCH --time=15:00:00
+#SBATCH --job-name=Simultaneous-Object-Base-SculpMem-thru${object}
+#SBATCH --time=40:00:00
 #SBATCH --cluster=${CUIG_SLURM_CLUSTER}
 #SBATCH --partition=${CUIG_SLURM_PARTITION}
 #SBATCH --nodes=1
 #SBATCH --gpus-per-node=1
 #SBATCH --cpus-per-task=4
 #SBATCH --ntasks-per-node=1
-#SBATCH --output=${logs_root}/ConAbl/thru${style}_%j.out
-#SBATCH --error=${logs_root}/ConAbl/thru${style}_%j.err
+#SBATCH --output=${logs_root}/SculpMem/thru${object}_%j.out
+#SBATCH --error=${logs_root}/SculpMem/thru${object}_%j.err
 
 # Script settings
 source ~/.bashrc
 set -euo pipefail
 
-echo "Simultaneous Style Unlearning with Base ConAbl starting through style: ${style}..."
+echo "Simultaneous Object Unlearning with Base SculpMem starting through object: ${object}..."
 
 # User must set
 REPO_ROOT="${REPO_ROOT}"
@@ -111,38 +164,40 @@ eval_classifier_dir="${eval_classifier_dir}"
 train_dir="${train_dir}"
 eval_dir="${eval_dir}"
 
-# ConAbl Specific
+# SculpMem Specific
 accelerate_config="${accelerate_config}"
-anchor_dataset_dir="${anchor_dataset_dir}"
-anchor_prompt_path="${anchor_prompt_path}"
 output_dir="${output_dir}"
-result_dir="${result_dir}"
 sample_output_dir="${sample_output_dir}"
 metrics_output_dir="${metrics_output_dir}"
 iterations=${iterations}
 eval_interval=${eval_interval}
 patience=${patience}
 unlearned_json='${unlearned_json}'
-retain_styles_json='${retain_styles_json}'
+unlearned_target_json='${unlearned_target_json}'
+unlearned_anchor_dataset_dirs_json='${unlearned_anchor_dataset_dirs_json}'
+unlearned_anchor_prompt_paths_json='${unlearned_anchor_prompt_paths_json}'
 retain_objects_json='${retain_objects_json}'
-styles_subset_json='${styles_subset_json}'
+retain_styles_json='${retain_styles_json}'
+objects_subset_json='${objects_subset_json}'
 
-# TRAIN: Unlearn the cumulative style set from the base model
+# TRAIN: Unlearn the cumulative object set from the base model
 cd "\${train_dir}"
 train_args=(
-    --anchor_target_concepts "\${unlearned_json}"
-    --concept_type "style"
+    --anchor_target_concepts "\${unlearned_target_json}"
+    --concept_type "object"
     --output_dir "\${output_dir}"
     --base_model_dir "\${base_model_dir}"
     --iterations "\${iterations}"
     --num_anchor_images 200
     --num_anchor_prompts 200
-    --anchor_dataset_dirs "\${anchor_dataset_dir}"
-    --anchor_prompt_paths "\${anchor_prompt_path}"
+    --anchor_dataset_dirs "\${unlearned_anchor_dataset_dirs_json}"
+    --anchor_prompt_paths "\${unlearned_anchor_prompt_paths_json}"
     --scale_lr
     --hflip
     --noaug
     --enable_xformers_memory_efficient_attention
+        --selft_dynamic
+        --selft_topk 0.50
     --eval_interval "\${eval_interval}"
     --patience "\${patience}"
     --eval_classifier_dir "\${eval_classifier_dir}"
@@ -151,7 +206,7 @@ train_args=(
 
 accelerate launch \
     --config_file "\${accelerate_config}" \
-    train_conabl.py \
+    train_sculpmem.py \
     "\${train_args[@]}"
 
 # Select the first sampled training checkpoint whose UnlearnCanvas UA clears the UA threshold.
@@ -198,25 +253,24 @@ cd "\${eval_dir}"
 python sample.py \
     --unet_ckpt_path "\${selected_ckpt}" \
     --output_dir "\${sample_output_dir}" \
-    --styles_subset "\${styles_subset_json}" \
-    --objects_subset "\${retain_objects_json}" \
+    --objects_subset "\${objects_subset_json}" \
+    --styles_subset "\${retain_styles_json}" \
     --pipeline_dir "\${base_model_dir}"
 
 # EVALUATE: Run evaluation on the generated images.
-cd "\${eval_dir}"
 python evaluate.py \
     --input_dir "\${sample_output_dir}" \
     --output_dir "\${metrics_output_dir}" \
     --eval_classifier_dir "\${eval_classifier_dir}" \
     --unlearn "\${unlearned_json}" \
-    --retain "\${retain_styles_json}" \
-    --cross_retain "\${retain_objects_json}"
+    --retain "\${retain_objects_json}" \
+    --cross_retain "\${retain_styles_json}"
 
-echo "Completed Unlearning and Sampling through Style: ${style}"
+echo "Completed Unlearning and Sampling through Object: ${object}"
 EOF
 
     sbatch "${job_file}"
     rm "${job_file}"
 done
 
-echo "Simultaneous Style Unlearning with Base ConAbl submission finished!"
+echo "Simultaneous Object Unlearning with Base SculpMem submission finished!"

@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-echo "Simultaneous Style Unlearning with Base ConAbl starting..."
+echo "Simultaneous Style Unlearning with Base SculpMem starting..."
 
 # Shared configuration
 _cuig_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,19 +17,19 @@ base_model_dir="${CUIG_UNLEARNCANVAS_GENERATOR_DIR}"
 eval_classifier_dir="${CUIG_UNLEARNCANVAS_CLASSIFIER_DIR}"
 
 # Select Unlearning Method and Evaluation Method
-train_dir="${REPO_ROOT}/UnlearningMethods/ConAbl"
+train_dir="${REPO_ROOT}/UnlearningMethods/SculpMem"
 eval_dir="${REPO_ROOT}/Evaluation/UnlearnCanvas"
 
-# ConAbl Specific
+# SculpMem Specific
 accelerate_config="${REPO_ROOT}/Configs/Accelerator/single_gpu.yaml"
-anchor_dataset_dir="${REPO_ROOT}/UnlearningMethods/ConAbl/anchor_datasets/style/Laion"
-anchor_prompt_path="${REPO_ROOT}/UnlearningMethods/ConAbl/anchor_prompts/style/Laion.txt"
-models_root="${OUTPUT_ROOT}/Simultaneous/Style/Base/ConAbl/Models"
-results_root="${OUTPUT_ROOT}/Simultaneous/Style/Base/ConAbl/Results"
+anchor_dataset_dir="${REPO_ROOT}/UnlearningMethods/SculpMem/anchor_datasets/style/Laion"
+anchor_prompt_path="${REPO_ROOT}/UnlearningMethods/SculpMem/anchor_prompts/style/Laion.txt"
+models_root="${OUTPUT_ROOT}/Simultaneous/Style/Base/SculpMem/Models"
+results_root="${OUTPUT_ROOT}/Simultaneous/Style/Base/SculpMem/Results"
 logs_root="${REPO_ROOT}/logs/Simultaneous/Style/Base"
-iterations=4000
+iterations=6000
 eval_interval=100
-patience=1000
+patience=3000
 
 array_to_json() {
     local json="["
@@ -52,7 +52,7 @@ retain_objects=("Architectures" "Butterfly" "Flame" "Flowers" "Horses" "Human" "
 retain_styles_json="$(array_to_json "${retain_styles[@]}")"
 retain_objects_json="$(array_to_json "${retain_objects[@]}")"
 
-mkdir -p "${logs_root}/ConAbl"
+mkdir -p "${logs_root}/SculpMem"
 
 # Keep track of the cumulative styles to unlearn
 unlearned=()
@@ -72,27 +72,27 @@ for style in "${unlearn_styles[@]}"; do
     result_dir="${results_root}/thru${style}"
     sample_output_dir="${result_dir}/images"
     metrics_output_dir="${result_dir}/metrics"
-    job_file="$(mktemp "/tmp/conabl_simultaneous_style_${style}_XXXXXX.sh")"
+    job_file="$(mktemp "/tmp/sculpmem_simultaneous_style_${style}_XXXXXX.sh")"
 
     cat > "${job_file}" <<EOF
 #!/bin/bash
 #SBATCH --account=${CUIG_SLURM_ACCOUNT}
-#SBATCH --job-name=Simultaneous-Style-Base-ConAbl-thru${style}
-#SBATCH --time=15:00:00
+#SBATCH --job-name=Simultaneous-Style-Base-SculpMem-thru${style}
+#SBATCH --time=30:00:00
 #SBATCH --cluster=${CUIG_SLURM_CLUSTER}
 #SBATCH --partition=${CUIG_SLURM_PARTITION}
 #SBATCH --nodes=1
 #SBATCH --gpus-per-node=1
 #SBATCH --cpus-per-task=4
 #SBATCH --ntasks-per-node=1
-#SBATCH --output=${logs_root}/ConAbl/thru${style}_%j.out
-#SBATCH --error=${logs_root}/ConAbl/thru${style}_%j.err
+#SBATCH --output=${logs_root}/SculpMem/thru${style}_%j.out
+#SBATCH --error=${logs_root}/SculpMem/thru${style}_%j.err
 
 # Script settings
 source ~/.bashrc
 set -euo pipefail
 
-echo "Simultaneous Style Unlearning with Base ConAbl starting through style: ${style}..."
+echo "Simultaneous Style Unlearning with Base SculpMem starting through style: ${style}..."
 
 # User must set
 REPO_ROOT="${REPO_ROOT}"
@@ -111,7 +111,7 @@ eval_classifier_dir="${eval_classifier_dir}"
 train_dir="${train_dir}"
 eval_dir="${eval_dir}"
 
-# ConAbl Specific
+# SculpMem Specific
 accelerate_config="${accelerate_config}"
 anchor_dataset_dir="${anchor_dataset_dir}"
 anchor_prompt_path="${anchor_prompt_path}"
@@ -143,6 +143,8 @@ train_args=(
     --hflip
     --noaug
     --enable_xformers_memory_efficient_attention
+        --selft_dynamic
+        --selft_topk 0.50
     --eval_interval "\${eval_interval}"
     --patience "\${patience}"
     --eval_classifier_dir "\${eval_classifier_dir}"
@@ -151,7 +153,7 @@ train_args=(
 
 accelerate launch \
     --config_file "\${accelerate_config}" \
-    train_conabl.py \
+    train_sculpmem.py \
     "\${train_args[@]}"
 
 # Select the first sampled training checkpoint whose UnlearnCanvas UA clears the UA threshold.
@@ -219,4 +221,4 @@ EOF
     rm "${job_file}"
 done
 
-echo "Simultaneous Style Unlearning with Base ConAbl submission finished!"
+echo "Simultaneous Style Unlearning with Base SculpMem submission finished!"

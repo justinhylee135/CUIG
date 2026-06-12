@@ -27,6 +27,9 @@ anchor_prompts_root="${REPO_ROOT}/UnlearningMethods/ConAbl/anchor_prompts/object
 models_root="${OUTPUT_ROOT}/Simultaneous/Object/Base/ConAbl/Models"
 results_root="${OUTPUT_ROOT}/Simultaneous/Object/Base/ConAbl/Results"
 logs_root="${REPO_ROOT}/logs/Simultaneous/Object/Base"
+iterations=4000
+eval_interval=100
+patience=1000
 
 array_to_json() {
     local json="["
@@ -166,6 +169,9 @@ accelerate_config="${accelerate_config}"
 output_dir="${output_dir}"
 sample_output_dir="${sample_output_dir}"
 metrics_output_dir="${metrics_output_dir}"
+iterations=${iterations}
+eval_interval=${eval_interval}
+patience=${patience}
 unlearned_json='${unlearned_json}'
 unlearned_target_json='${unlearned_target_json}'
 unlearned_anchor_dataset_dirs_json='${unlearned_anchor_dataset_dirs_json}'
@@ -181,7 +187,7 @@ train_args=(
     --concept_type "object"
     --output_dir "\${output_dir}"
     --base_model_dir "\${base_model_dir}"
-    --iterations 4000
+    --iterations "\${iterations}"
     --num_anchor_images 200
     --num_anchor_prompts 200
     --anchor_dataset_dirs "\${unlearned_anchor_dataset_dirs_json}"
@@ -190,8 +196,8 @@ train_args=(
     --hflip
     --noaug
     --enable_xformers_memory_efficient_attention
-    --eval_interval 100
-    --patience 1000
+    --eval_interval "\${eval_interval}"
+    --patience "\${patience}"
     --eval_classifier_dir "\${eval_classifier_dir}"
     --overwrite_existing_ckpt
 )
@@ -201,10 +207,49 @@ accelerate launch \
     train_conabl.py \
     "\${train_args[@]}"
 
+# Select the first sampled training checkpoint whose UnlearnCanvas UA clears the UA threshold.
+if ! selected_checkpoint_info="\$(OUTPUT_DIR="\${output_dir}" EVAL_INTERVAL="\${eval_interval}" ITERATIONS="\${iterations}" python - <<'PY'
+import json
+import os
+import sys
+
+output_dir = os.environ["OUTPUT_DIR"]
+eval_interval = int(os.environ["EVAL_INTERVAL"])
+iterations = int(os.environ["ITERATIONS"])
+threshold = 0.9900
+
+for log_num in range(eval_interval, iterations + 1, eval_interval):
+    summary_path = os.path.join(output_dir, "logs", f"log_{log_num}", "metrics", "summary.json")
+    if not os.path.isfile(summary_path):
+        continue
+
+    with open(summary_path, "r", encoding="utf-8") as handle:
+        raw_ua = float(json.load(handle).get("UA", 0.0))
+    ua = raw_ua / 100.0 if raw_ua > 1.0 else raw_ua
+
+    if ua > threshold:
+        ckpt_path = os.path.join(output_dir, "delta.bin")
+        if not os.path.isfile(ckpt_path):
+            raise FileNotFoundError(f"Selected metrics file {summary_path} but checkpoint is missing: {ckpt_path}")
+        print(f"{log_num} {ckpt_path}")
+        sys.exit(0)
+
+sys.exit(1)
+PY
+)"; then
+    echo "No sampled training checkpoint under \${output_dir}/logs has UA > 0.9900." >&2
+    exit 1
+fi
+read -r selected_log_num selected_ckpt <<< "\${selected_checkpoint_info}"
+sample_output_dir="\${sample_output_dir}-log_\${selected_log_num}"
+metrics_output_dir="\${metrics_output_dir}-log_\${selected_log_num}"
+echo "Selected sampled training checkpoint for downstream sampling: \${selected_ckpt}"
+echo "Writing downstream outputs with suffix: -log_\${selected_log_num}"
+
 # SAMPLE: Generate images from the current simultaneously unlearned model
 cd "\${eval_dir}"
 python sample.py \
-    --unet_ckpt_path "\${output_dir}/delta.bin" \
+    --unet_ckpt_path "\${selected_ckpt}" \
     --output_dir "\${sample_output_dir}" \
     --objects_subset "\${objects_subset_json}" \
     --styles_subset "\${retain_styles_json}" \
