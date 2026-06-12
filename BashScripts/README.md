@@ -42,6 +42,8 @@ Run submission/generator scripts directly with `bash`; they source `BashScripts/
 bash BashScripts/Independent/Object/Base/ConAbl.sh
 ```
 
+Some scripts are submission/generator scripts that create one SLURM job per concept or sweep setting. Others are direct SLURM scripts submitted through `BashScripts/submit.sh`. The command examples above show both patterns.
+
 Logs are written under `logs/` using paths derived from the script location or experiment folder.
 
 ## Directory Layout
@@ -61,7 +63,9 @@ Layer 3:
 - `Projection`, `SelFT`, `Weight`, `Hybrid`, `Merge`: regularized or merged variants
 
 Layer 4:
-- `ConAbl.sh`: ConAbl Unlearning Method
+- `ConAbl.sh`: Concept Ablation unlearning method
+- `SculpMem.sh`: Sculpting Memory unlearning method.
+- `ESD-SDXL.sh`: Erasing Stable Diffusion (SDXL Architecture) method.
 
 ## Configuration Files
 
