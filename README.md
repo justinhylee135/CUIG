@@ -89,11 +89,6 @@ Use the existing layout when adding new functionality:
 
 When adding a method, prefer exposing method-specific options through its training script while keeping reusable preservation logic in `Regularizers/`.
 
-## To-Do
-
-- Bash scripts for Celebrity ESD-SDXL
-- Bash scripts for UnlearnCanvas SculpMem
-
 ## Citation
 
 ```bibtex
